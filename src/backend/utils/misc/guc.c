@@ -24,9 +24,19 @@
  */
 #include "postgres.h"
 
+
+#include <alloca.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <float.h>
+#include <string.h>
 #include <limits.h>
 #include <math.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/ucontext.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "access/xact.h"
@@ -35,6 +45,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_parameter_acl.h"
 #include "guc_internal.h"
+#include "guc_composite.h"
 #include "libpq/pqformat.h"
 #include "libpq/protocol.h"
 #include "miscadmin.h"
@@ -61,11 +72,6 @@
 #define CONFIG_EXEC_PARAMS_NEW "global/config_exec_params.new"
 #endif
 
-/*
- * Precision with which REAL type guc values are to be printed for GUC
- * serialization.
- */
-#define REALTYPE_PRECISION 17
 
 /*
  * Safe search path when executing code as the table owner, such as during
@@ -198,6 +204,8 @@ static const char *const map_old_guc_names[] = {
 /* Memory context holding all GUC-related data */
 static MemoryContext GUCMemoryContext;
 
+
+
 /*
  * We use a dynahash table to look up GUCs by name, or to iterate through
  * all the GUCs.  The gucname field is redundant with gucvar->name, but
@@ -210,6 +218,7 @@ typedef struct
 } GUCHashEntry;
 
 static HTAB *guc_hashtab;		/* entries are GUCHashEntrys */
+
 
 /*
  * In addition to the hash table, variables having certain properties are
@@ -268,6 +277,8 @@ static bool call_real_check_hook(struct config_real *conf, double *newval,
 static bool call_string_check_hook(struct config_string *conf, char **newval,
 								   void **extra, GucSource source, int elevel);
 static bool call_enum_check_hook(struct config_enum *conf, int *newval,
+								 void **extra, GucSource source, int elevel);
+static bool call_struct_check_hook(struct config_struct *conf, void *newval,
 								 void **extra, GucSource source, int elevel);
 
 
@@ -400,8 +411,13 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 
 		if (record)
 		{
-			/* If it's already marked, then this is a duplicate entry */
-			if (record->status & GUC_IS_IN_FILE)
+			/*
+			 * If it's already marked, then this is a duplicate entry
+			 * However structure values are patches that could intersect or union like sets
+			 */
+			if ((record->status & GUC_IS_IN_FILE) &&
+				!strchr(item->name, '-') &&
+				!strchr(item->name, '[') ) /* do not optimize for structures */
 			{
 				/*
 				 * Mark the earlier occurrence(s) as dead/ignorable.  We could
@@ -535,7 +551,6 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 	{
 		char	   *pre_value = NULL;
 		int			scres;
-
 		/* Ignore anything marked as ignorable */
 		if (item->ignore)
 			continue;
@@ -551,7 +566,6 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 			/* must dup, else might have dangling pointer below */
 			pre_value = pstrdup(preval);
 		}
-
 		scres = set_config_option(item->name, item->value,
 								  context, PGC_S_FILE,
 								  GUC_ACTION_SET, applySettings, 0, false);
@@ -740,6 +754,52 @@ set_string_field(struct config_string *conf, char **field, char *newval)
 		guc_free(oldval);
 }
 
+
+/*
+ * Detect whether structval is referenced anywhere in a GUC struct item
+ */
+static bool
+struct_field_used(struct config_struct *conf, void *structval)
+{
+	GucStack   *stack;
+
+	if (structval == conf->variable ||
+		structval == conf->reset_val ||
+		structval == conf->boot_val)
+		return true;
+	for (stack = conf->gen.stack; stack; stack = stack->prev)
+	{
+		if (structval == stack->prior.val.structval ||
+			structval == stack->masked.val.structval)
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Support for assigning to a field of a struct GUC item.  Free the prior
+ * value if it's not referenced anywhere else in the item (including stacked
+ * states).
+ */
+static void
+set_struct_field(struct config_struct *conf, void **field, void *newval, bool is_variable)
+{
+	void	   *oldval = *field;
+	/* Do the assignment */
+	if (is_variable){
+		free_aux_struct_mem(*field, conf->type);
+		struct_dup_impl(*field, newval, conf->type);
+	}
+	else{
+		*field = struct_dup(newval, conf->type);
+	}
+
+	/* Free old value if it's not NULL and isn't referenced anymore */
+	if (!is_variable && oldval && !struct_field_used(conf, oldval)){
+		free_struct(oldval, conf->type);
+	}
+}
+
 /*
  * Detect whether an "extra" struct is referenced anywhere in a GUC item
  */
@@ -770,6 +830,10 @@ extra_field_used(struct config_generic *gconf, void *extra)
 			break;
 		case PGC_ENUM:
 			if (extra == ((struct config_enum *) gconf)->reset_extra)
+				return true;
+			break;
+		case PGC_STRUCT:
+			if (extra == ((struct config_struct *) gconf)->reset_extra)
 				return true;
 			break;
 	}
@@ -834,6 +898,10 @@ set_stack_value(struct config_generic *gconf, config_var_value *val)
 			val->val.enumval =
 				*((struct config_enum *) gconf)->variable;
 			break;
+		case PGC_STRUCT:
+			set_struct_field((struct config_struct *) gconf,
+							 &(val->val.structval),
+							 ((struct config_struct *)gconf)->variable, false);
 	}
 	set_extra_field(gconf, &(val->extra), gconf->extra);
 }
@@ -857,6 +925,11 @@ discard_stack_value(struct config_generic *gconf, config_var_value *val)
 			set_string_field((struct config_string *) gconf,
 							 &(val->val.stringval),
 							 NULL);
+			break;
+		case PGC_STRUCT:
+			set_struct_field((struct config_struct *) gconf,
+							 &(val->val.structval),
+							 NULL, false);
 			break;
 	}
 	set_extra_field(gconf, &(val->extra), NULL);
@@ -906,6 +979,14 @@ build_guc_variables(void)
 	int			num_vars = 0;
 	HASHCTL		hash_ctl;
 	GUCHashEntry *hentry;
+
+
+	int			size_types;
+	int         num_types = 0;
+	HASHCTL		types_hash_ctl;
+	OptionTypeHashEntry *type_hentry;
+	const char *built_in_types[] = {"bool", "int", "real", "enum", "string"};
+
 	bool		found;
 	int			i;
 
@@ -916,6 +997,14 @@ build_guc_variables(void)
 	GUCMemoryContext = AllocSetContextCreate(TopMemoryContext,
 											 "GUCMemoryContext",
 											 ALLOCSET_DEFAULT_SIZES);
+
+	/*
+	 * Count all type defintions
+	 */
+	for (i = 0; UserDefinedConfigureTypes[i].type; i++)
+	{
+		num_types++;
+	}
 
 	/*
 	 * Count all the built-in variables, and set their vartypes correctly.
@@ -961,9 +1050,52 @@ build_guc_variables(void)
 		num_vars++;
 	}
 
+	for (i = 0; ConfigureNamesStruct[i].gen.name; i++ )
+	{
+		struct config_struct *conf = &ConfigureNamesStruct[i];
+
+		conf->gen.vartype = PGC_STRUCT;
+		num_vars++;
+	}
+
+
 	/*
-	 * Create hash table with 20% slack
+	 * Create hash tables with 20% slack
 	 */
+
+	size_types = num_types + num_types / 4; //it is 25% slack. isn't it?
+	types_hash_ctl.keysize = sizeof(char *);
+	types_hash_ctl.entrysize = sizeof(OptionTypeHashEntry);
+	types_hash_ctl.hash = guc_name_hash;
+	types_hash_ctl.match = guc_name_match;
+	types_hash_ctl.hcxt = GUCMemoryContext;
+	guc_types_hashtab = hash_create("GUC user types hash table",
+							  size_types,
+							  &types_hash_ctl,
+							  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
+
+	for (i = 0; UserDefinedConfigureTypes[i].type; i++)
+	{
+		int check = 1;
+		struct type_definition *type_definition = &UserDefinedConfigureTypes[i];
+
+		type_hentry = (OptionTypeHashEntry *) hash_search(guc_types_hashtab,
+											  &type_definition->type,
+											  HASH_ENTER,
+											  &found);
+		Assert(!found);
+		type_hentry->definition = type_definition;
+
+		for (int j = 0; j < CNT_SIMPLE_TYPES; j++) {
+			check *= strcmp(type_definition->type, built_in_types[j]);
+		}
+		if (check) { //we mark user type structures up
+			init_type_definition(type_definition);
+		}
+	}
+
+	Assert(num_types == hash_get_num_entries(guc_types_hashtab));
+
 	size_vars = num_vars + num_vars / 4;
 
 	hash_ctl.keysize = sizeof(char *);
@@ -1036,7 +1168,22 @@ build_guc_variables(void)
 		hentry->gucvar = gucvar;
 	}
 
+	for (i = 0; ConfigureNamesStruct[i].gen.name; i++)
+	{
+		struct config_generic *gucvar = &ConfigureNamesStruct[i].gen;
+		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
+											  &gucvar->name,
+											  HASH_ENTER,
+											  &found);
+		Assert(!found);
+		hentry->gucvar = gucvar;
+	}
+
 	Assert(num_vars == hash_get_num_entries(guc_hashtab));
+}
+
+int get_declared_types(void) {
+	return hash_get_num_entries(guc_types_hashtab);
 }
 
 /*
@@ -1077,13 +1224,14 @@ valid_custom_variable_name(const char *name)
 {
 	bool		saw_sep = false;
 	bool		name_start = true;
-
-	for (const char *p = name; *p; p++)
+	bool        is_field = false;
+	const char *p;
+	for (p = name; *p; p++)
 	{
 		if (*p == GUC_QUALIFIER_SEPARATOR)
 		{
-			if (name_start)
-				return false;	/* empty name component */
+			if (name_start || is_field)
+				return false;	/* empty name component or field of struct*/
 			saw_sep = true;
 			name_start = true;
 		}
@@ -1096,10 +1244,38 @@ valid_custom_variable_name(const char *name)
 		}
 		else if (!name_start && strchr("0123456789$", *p) != NULL)
 			 /* okay as non-first character */ ;
+		else if (*p == '-')
+		{
+			if (!name_start && *(p+1) == '>')
+			{
+				name_start = true;
+				is_field = true;
+				p++;
+			}
+			else
+				return false;
+		}
+		else if (!name_start && *p == '[')
+		{
+			p++;
+			while (strchr("0123456789 ", *p) != NULL)
+				p++;
+
+			if ((*p == ']' && !*(p+1)) || *(p+1) == '-')
+				is_field = true;
+			else
+				return false;
+		}
 		else
 			return false;
 	}
-	if (name_start)
+	/*
+	 * Structure name could be ended with '->', we should ignore last dereference
+	 * This dirty hack is used to see difference between structure names and other GUCs
+	 * It is important in case when we write placeholder for structure, cause
+	 * rule of writing placeholders for structures and for other types are not the same
+	 */
+	if (name_start && *(p - 1) != '>')
 		return false;			/* empty name component */
 	/* OK if we found at least one separator */
 	return saw_sep;
@@ -1237,6 +1413,9 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 {
 	GUCHashEntry *hentry;
 	int			i;
+	char *deref_ptr = NULL;
+	char *deref_ptr_b = NULL;
+	char *deref_ptr_m = NULL;
 
 	Assert(name);
 
@@ -1247,6 +1426,37 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 										  NULL);
 	if (hentry)
 		return hentry->gucvar;
+
+	/*
+	 * If value is a field of struct, then it's name is a path that consists of
+	 * fields names, dereferences "->" and indeces [<number>]
+	 */
+	deref_ptr_b = strchr(name, '[');
+	deref_ptr_m = strchr(name, '-');
+	if (deref_ptr_b || deref_ptr_m) {
+		char *struct_name;
+
+		/* take first dereference */
+		if (((deref_ptr_b < deref_ptr_m) && deref_ptr_b) || !deref_ptr_m)
+			deref_ptr = deref_ptr_b;
+		else
+			deref_ptr = deref_ptr_m;
+
+		/* find structure with first name in path */
+		struct_name = guc_malloc(ERROR, (deref_ptr - name + 1));
+		strncpy(struct_name, name, (deref_ptr - name));
+		struct_name[deref_ptr - name] = 0;
+
+		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
+			&struct_name,
+			HASH_FIND,
+			NULL);
+
+		guc_free(struct_name);
+
+		if (hentry)
+			return hentry->gucvar;
+	}
 
 	/*
 	 * See if the name is an obsolete name for a variable.  We assume that the
@@ -1266,7 +1476,24 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 		 * Check if the name is valid, and if so, add a placeholder.
 		 */
 		if (assignable_custom_variable_name(name, skip_errors, elevel))
+		{
+			/*
+			 * For structure we extract name for pHolder from path to field
+			 */
+			if (deref_ptr) {
+				struct config_generic *result;
+				/* extract name */
+				char *struct_name = guc_malloc(ERROR, (deref_ptr - name + 1) * sizeof(char));
+				strncpy(struct_name, name, (deref_ptr - name));
+				struct_name[deref_ptr - name] = 0;
+
+				result = add_placeholder_variable(struct_name, elevel);
+				guc_free(struct_name);
+
+				return result;
+			}
 			return add_placeholder_variable(name, elevel);
+		}
 		else
 			return NULL;		/* error message, if any, already emitted */
 	}
@@ -1430,6 +1657,7 @@ check_GUC_name_for_parameter_acl(const char *name)
  * real - can be 0.0, otherwise must be same as the boot_val
  * string - can be NULL, otherwise must be strcmp equal to the boot_val
  * enum - must be same as the boot_val
+ * struct - can be NULL, otherwise must be bitwise equal to the boot_val
  */
 #ifdef USE_ASSERT_CHECKING
 static bool
@@ -1500,6 +1728,28 @@ check_GUC_init(struct config_generic *gconf)
 				}
 				break;
 			}
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+				bool is_null = true;
+				int type_size = get_type_size(conf->type);
+				for (int i = 0; i < type_size; ++i) {
+					if (*((char*)(conf->variable) + i) != 0){
+						is_null = false;
+						break;
+					}
+				}
+				if (!is_null && struct_cmp(conf->variable, conf->boot_val, conf->type)) {
+						char *boot_str = struct_to_str(conf->boot_val, conf->type, false);
+						char *var_str = struct_to_str(conf->variable, conf->type, false);
+						elog(LOG, "GUC (PGC_STRUCT %s) %s, boot_val=%s, C-var=%s",
+							conf->type, conf->gen.name, boot_str, var_str);
+						guc_free(boot_str);
+						guc_free(var_str);
+						return false;
+				}
+				break;
+			}
 	}
 
 	/* Flag combinations */
@@ -1542,7 +1792,6 @@ InitializeGUCOptions(void)
 	 * Create GUCMemoryContext and build hash table of all GUC variables.
 	 */
 	build_guc_variables();
-
 	/*
 	 * Load all variables with their compiled-in defaults, and initialize
 	 * status fields as needed.
@@ -1555,7 +1804,6 @@ InitializeGUCOptions(void)
 
 		InitializeOneGUCOption(hentry->gucvar);
 	}
-
 	reporting_enabled = false;
 
 	/*
@@ -1745,6 +1993,51 @@ InitializeOneGUCOption(struct config_generic *gconf)
 				if (conf->assign_hook)
 					conf->assign_hook(newval, extra);
 				*conf->variable = conf->reset_val = newval;
+				conf->gen.extra = conf->reset_extra = extra;
+				break;
+			}
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+				void 		*newval;
+				void 		*extra = NULL;
+				void		*var_buffer = NULL;
+				int         valsize;
+
+				if (!conf->type && !conf->definition) {
+					elog(FATAL, "failed to initialize %s. The type not specified",
+						conf->gen.name);
+					break;
+				}
+				if (!conf->type) {
+					conf->type = conf->definition->type;
+				}
+				if (!conf->definition && !is_static_array_type(conf->type) && !is_dynamic_array_type(conf->type))
+				{
+					conf->definition = get_type_definition(conf->type);
+					if (!conf->definition) {
+						elog(FATAL, "failed to initialize %s. Undefined type %s",
+							conf->gen.name, conf->type);
+						break;
+					}
+				}
+
+				/* non-NULL boot_val must always get strdup'd */
+				if (conf->boot_val != NULL)
+					newval = struct_dup(conf->boot_val, conf->type);
+				else
+					newval = NULL;
+				if (!call_struct_check_hook(conf, newval, &extra,
+											PGC_S_DEFAULT, LOG))
+					elog(FATAL, "failed to initialize %s to %s",
+						 conf->gen.name, newval ? struct_to_str(newval, conf->type, false) : "");
+				if (conf->assign_hook)
+					conf->assign_hook(newval, extra);
+				conf->reset_val = newval;
+				valsize = get_type_size(conf->type);
+				var_buffer = struct_dup(newval, conf->type);
+				memcpy(conf->variable, var_buffer, valsize);
+				guc_free(var_buffer);
 				conf->gen.extra = conf->reset_extra = extra;
 				break;
 			}
@@ -2082,6 +2375,20 @@ ResetAllOptions(void)
 						conf->assign_hook(conf->reset_val,
 										  conf->reset_extra);
 					*conf->variable = conf->reset_val;
+					set_extra_field(&conf->gen, &conf->gen.extra,
+									conf->reset_extra);
+					break;
+				}
+			case PGC_STRUCT:
+				{
+					struct config_struct *conf = (struct config_struct *) gconf;
+					int valsize;
+
+					if (conf->assign_hook)
+						conf->assign_hook(conf->reset_val,
+										  conf->reset_extra);
+					valsize = get_type_size(conf->type);
+					memcpy(conf->variable, conf->reset_val, valsize);
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									conf->reset_extra);
 					break;
@@ -2498,6 +2805,33 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 												newextra);
 								changed = true;
 							}
+							break;
+						}
+					case PGC_STRUCT:
+						{
+							struct config_struct *conf = (struct config_struct *) gconf;
+							void	   *newval = newvalue.val.structval;
+							void	   *newextra = newvalue.extra;
+							if (struct_cmp(conf->variable, newval, conf->type) ||
+								conf->gen.extra != newextra)
+							{
+								if (conf->assign_hook)
+									conf->assign_hook(newval, newextra);
+
+								set_struct_field(conf, &conf->variable, newval, true);
+								set_extra_field(&conf->gen, &conf->gen.extra,
+												newextra);
+								changed = true;
+							}
+
+							/*
+							 * Release stacked values if not used anymore. We
+							 * could use discard_stack_value() here, but since
+							 * we have type-specific code anyway, might as
+							 * well inline it.
+							 */
+							set_struct_field(conf, &stack->prior.val.structval, NULL, false);
+							set_struct_field(conf, &stack->masked.val.structval, NULL, false);
 							break;
 						}
 				}
@@ -3108,6 +3442,7 @@ config_enum_get_options(struct config_enum *record, const char *prefix,
 	return retstr.data;
 }
 
+
 /*
  * Parse and validate a proposed value for the specified configuration
  * parameter.
@@ -3291,6 +3626,27 @@ parse_and_validate_value(struct config_generic *record,
 					return false;
 			}
 			break;
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) record;
+				const char *hintmsg;
+
+				if (!parse_composite(value, conf->type, &newval->structval, conf->variable,
+					conf->gen.flags, &hintmsg))
+				{
+					ereport(elevel,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("invalid value for parameter \"%s\": \"%s\"",
+									conf->gen.name, value),
+							hintmsg ? errhint("%s", _(hintmsg)) : 0));
+					return false;
+				}
+
+				if (!call_struct_check_hook(conf, newval->structval, newextra,
+											source, elevel))
+					return false;
+			}
+			break;
 	}
 
 	return true;
@@ -3437,8 +3793,9 @@ set_config_with_handle(const char *name, config_handle *handle,
 	if (!handle)
 	{
 		record = find_option(name, true, false, elevel);
-		if (record == NULL)
+		if (record == NULL){
 			return 0;
+		}
 	}
 	else
 		record = handle;
@@ -3713,7 +4070,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 					if (!parse_and_validate_value(record, value,
 												  source, elevel,
 												  &newval_union, &newextra))
-						return 0;
+					return 0;
 				}
 				else if (source == PGC_S_DEFAULT)
 				{
@@ -4003,13 +4360,66 @@ set_config_with_handle(const char *name, config_handle *handle,
 				GucSource	orig_source = source;
 				Oid			orig_srole = srole;
 
+
 #define newval (newval_union.stringval)
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, value,
-												  source, elevel,
-												  &newval_union, &newextra))
+					/* prepare placeholder for structure */
+					bool is_struct = false;
+					bool is_composite = true;
+					bool check_parsing;
+					char *prepared_strval = (char *)value; /* be careful with free */
+					/* check if string is a field of composite object or it*/
+					if (strchr(name, '-') || strchr(name,'['))
+						is_struct = true;
+
+					if (name[strlen(name) - 2] == '-' && name[strlen(name) - 1] == '>')
+						is_composite = true;
+
+					if (is_struct)
+					{
+						char *list;
+						char *old_list;
+
+						/*
+						* If name is a struct (simple or composite):
+						* name that ended with -> is name for composite value
+						* all other values (atomic / simple) must be escaped
+						*/
+						if (!is_composite)
+						{
+							char *escaped = escape_single_quotes_ascii(value);
+							char *quoted = guc_malloc(ERROR, strlen(escaped) + 3);
+							sprintf(quoted, "\'%s\'", escaped);
+
+							prepared_strval = convert_path_composite(name, quoted);
+
+							free (escaped);
+							guc_free(quoted);
+						}
+						else
+							prepared_strval = convert_path_composite(name, value);
+
+						/* get list from current value */
+						old_list = *(conf->variable);
+						if(!old_list)
+							old_list = "";
+
+						/* Add value to placeholder patch list */
+						list = guc_malloc(ERROR, strlen(old_list) + strlen(prepared_strval) + 2);
+						sprintf(list, "%s%s;", old_list, prepared_strval);
+
+						guc_free(prepared_strval);
+						prepared_strval = list;
+					}
+
+					check_parsing = parse_and_validate_value(record, prepared_strval, source,
+															 elevel, &newval_union, &newextra);
+
+					if (prepared_strval != value)
+						guc_free(prepared_strval);
+					if(!check_parsing)
 						return 0;
 				}
 				else if (source == PGC_S_DEFAULT)
@@ -4263,6 +4673,142 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 #undef newval
 			}
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) record;
+				bool parse_result;
+
+#define newval (newval_union.structval)
+				if (value)
+				{
+					const char *str_val = (const char *)normalize_struct_value(name, value);
+
+					parse_result = parse_and_validate_value(record, str_val, source, elevel,
+													&newval_union, &newextra);
+
+					guc_free((void *)str_val);
+
+					if (!parse_result)
+						return 0;
+				}
+				else if (source == PGC_S_DEFAULT)
+				{
+					/* non-NULL boot_val must be dup'd*/
+					if (conf->boot_val != NULL)
+					{
+						newval = struct_dup( conf->boot_val, conf->type);
+						if (newval == NULL)
+							return 0;
+					}
+					else
+						newval = NULL;
+
+					if (!call_struct_check_hook(conf, newval, &newextra,
+												source, elevel))
+					{
+						guc_free(newval);
+						return 0;
+					}
+				}
+				else
+				{
+					/*
+					* struct_dup not needed, since reset_val is already under
+					* guc.c's control
+					*/
+					newval = conf->reset_val;
+					newextra = conf->reset_extra;
+					source = conf->gen.reset_source;
+					context = conf->gen.reset_scontext;
+					srole = conf->gen.reset_srole;
+				}
+
+				if (prohibitValueChange)
+				{
+					bool		newval_different;
+
+					/* newval shouldn't be NULL, so we're a bit sloppy here */
+					newval_different = (conf->variable == NULL ||
+										newval == NULL ||
+										struct_cmp(conf->variable, newval, conf->type) != 0);
+
+					/* Release newval, unless it's reset_val */
+					if (newval && !struct_field_used(conf, newval))
+						free_struct(newval, conf->type);
+					/* Release newextra, unless it's reset_extra */
+					if (newextra && !extra_field_used(&conf->gen, newextra))
+						guc_free(newextra);
+
+					if (newval_different)
+					{
+						record->status |= GUC_PENDING_RESTART;
+						ereport(elevel,
+								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
+								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
+										conf->gen.name)));
+						return 0;
+					}
+					record->status &= ~GUC_PENDING_RESTART;
+					return -1;
+				}
+
+				if (changeVal)
+				{
+					/* Save old value to support transaction abort */
+					if (!makeDefault)
+						push_old_value(&conf->gen, action);
+
+					if (conf->assign_hook)
+						conf->assign_hook(newval, newextra);
+					set_struct_field(conf, &conf->variable, newval, true);
+					set_extra_field(&conf->gen, &conf->gen.extra,
+									newextra);
+					set_guc_source(&conf->gen, source);
+					conf->gen.scontext = context;
+					conf->gen.srole = srole;
+				}
+
+				if (makeDefault)
+				{
+					GucStack   *stack;
+
+					if (conf->gen.reset_source <= source)
+					{
+						set_struct_field(conf, &conf->reset_val, newval, false);
+						set_extra_field(&conf->gen, &conf->reset_extra,
+										newextra);
+						conf->gen.reset_source = source;
+						conf->gen.reset_scontext = context;
+						conf->gen.reset_srole = srole;
+					}
+					for (stack = conf->gen.stack; stack; stack = stack->prev)
+					{
+						if (stack->source <= source)
+						{
+							set_struct_field(conf, &stack->prior.val.structval,
+											 newval, false);
+							set_extra_field(&conf->gen, &stack->prior.extra,
+											newextra);
+							stack->source = source;
+							stack->scontext = context;
+							stack->srole = srole;
+						}
+					}
+				}
+
+
+				/* Perhaps we didn't install newvaln anywhere */
+				if (newval && !struct_field_used(conf, newval)) {
+					free_struct(newval, conf->type);
+				}
+				/* Perhaps we didn't install newextra anywhere */
+				if (newextra && !extra_field_used(&conf->gen, newextra))
+				{
+					guc_free(newextra);
+					break;
+				}
+#undef newval
+			}
 	}
 
 	if (changeVal && (record->flags & GUC_REPORT) &&
@@ -4390,6 +4936,10 @@ GetConfigOption(const char *name, bool missing_ok, bool restrict_privileged)
 		case PGC_ENUM:
 			return config_enum_lookup_by_value((struct config_enum *) record,
 											   *((struct config_enum *) record)->variable);
+		case PGC_STRUCT:
+			void *var = ((struct config_struct *) record)->variable;
+			const char *var_type = ((struct config_struct *) record)->type;
+			return var ? struct_to_str(var, var_type, false) : "nil";
 	}
 	return NULL;
 }
@@ -4438,6 +4988,11 @@ GetConfigOptionResetString(const char *name)
 		case PGC_ENUM:
 			return config_enum_lookup_by_value((struct config_enum *) record,
 											   ((struct config_enum *) record)->reset_val);
+
+		case PGC_STRUCT:
+			void *val = ((struct config_struct *) record)->reset_val;
+			const char *val_type = ((struct config_struct *) record)->type;
+			return val ? struct_to_str(val, val_type, false) : "nil";
 	}
 	return NULL;
 }
@@ -4488,25 +5043,52 @@ write_auto_conf_file(int fd, const char *filename, ConfigVariable *head)
 				 errmsg("could not write to file \"%s\": %m", filename)));
 	}
 
-	/* Emit each parameter, properly quoting the value */
+	/*
+	 * Emit each parameter, properly quoting the value
+	 * except when the option is a structure
+	 */
 	for (item = head; item != NULL; item = item->next)
 	{
+		bool       is_struct = false;
 		char	   *escaped;
 
 		resetStringInfo(&buf);
 
-		appendStringInfoString(&buf, item->name);
-		appendStringInfoString(&buf, " = '");
+		/*
+		 * Strutures names could be ended with "->" only in internal
+		 * representation. So delete this suffix for user interface
+		 */
+		if (item->name[strlen(item->name) - 2] == '-')
+		{
+			item->name[strlen(item->name) - 2] = 0;
+			appendStringInfoString(&buf, item->name);
+			is_struct = true;
+			item->name[strlen(item->name) - 2] = '-';
+		}
+		else
+			appendStringInfoString(&buf, item->name);
+		appendStringInfoString(&buf, " = ");
 
-		escaped = escape_single_quotes_ascii(item->value);
-		if (!escaped)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-		appendStringInfoString(&buf, escaped);
-		free(escaped);
+		/*
+		 * Append quotes for all atomic types
+		 * But do not append qoutes for structure values
+		 */
+		if (!is_struct)
+		{
+			appendStringInfoString(&buf, "\'");
+			escaped = escape_single_quotes_ascii(item->value);
+			if (!escaped)
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+							errmsg("out of memory")));
+			appendStringInfoString(&buf, escaped);
+			free(escaped);
+			appendStringInfoString(&buf, "\'");
+		}
+		else
+			appendStringInfoString(&buf, item->value);
 
-		appendStringInfoString(&buf, "'\n");
+		appendStringInfoString(&buf, "\n");
 
 		errno = 0;
 		if (write(fd, buf.data, buf.len) != buf.len)
@@ -4541,6 +5123,9 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 			   *next,
 			   *prev = NULL;
 
+	char *short_name = tokenize_field_path(pstrdup(name));
+	bool is_struct = strchr(name,'-');
+
 	/*
 	 * Remove any existing match(es) for "name".  Normally there'd be at most
 	 * one, but if external tools have modified the config file, there could
@@ -4548,8 +5133,10 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 	 */
 	for (item = *head_p; item != NULL; item = next)
 	{
+		char *tokenized_item_name = tokenize_field_path(pstrdup(item->name));
 		next = item->next;
-		if (guc_name_compare(item->name, name) == 0)
+
+		if (guc_name_compare(tokenized_item_name, short_name) == 0)
 		{
 			/* found a match, delete it */
 			if (prev)
@@ -4566,15 +5153,23 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 		}
 		else
 			prev = item;
+		pfree(tokenized_item_name);
 	}
 
 	/* Done if we're trying to delete it */
 	if (value == NULL)
+	{
+		pfree(short_name);
 		return;
+	}
 
 	/* OK, append a new entry */
 	item = palloc(sizeof *item);
-	item->name = pstrdup(name);
+	if (is_struct)
+		item->name = pstrdup(name);
+	else
+		item->name = pstrdup(short_name);
+
 	item->value = pstrdup(value);
 	item->errmsg = NULL;
 	item->filename = pstrdup("");	/* new item has no location */
@@ -4588,6 +5183,7 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 	else
 		(*tail_p)->next = item;
 	*tail_p = item;
+	pfree(short_name);
 }
 
 
@@ -4628,6 +5224,14 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 	switch (altersysstmt->setstmt->kind)
 	{
 		case VAR_SET_VALUE:
+			if (stmt_has_serialized_struct(altersysstmt->setstmt))
+			{
+				/* replace name for structs */
+				char *struct_name = (char *)palloc(strlen(name) + 3); /* 3 = len of "->\0" */
+				sprintf(struct_name, "%s->", name);
+				pfree(name);
+				name = struct_name;
+			}
 			value = ExtractSetVariableArgs(altersysstmt->setstmt);
 			break;
 
@@ -4700,8 +5304,15 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 			{
 				union config_var_val newval;
 				void	   *newextra = NULL;
+				char *prepared_value = value;
 
-				if (!parse_and_validate_value(record, value,
+				/*
+				 * For struct values we should convert path
+				 */
+				if (record->vartype == PGC_STRUCT)
+					prepared_value = normalize_struct_value(name, value);
+
+				if (!parse_and_validate_value(record, prepared_value,
 											  PGC_S_FILE, ERROR,
 											  &newval, &newextra))
 					ereport(ERROR,
@@ -4709,8 +5320,67 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 							 errmsg("invalid value for parameter \"%s\": \"%s\"",
 									name, value)));
 
+				/*
+				 * Each structure placeholder has -> in name
+				 * For placeholder we using rules from set_config_with_handle
+				 * Also cut off suffix of name
+				 */
+				if (record->vartype == PGC_STRING && strchr(name,'-'))
+				{
+					struct config_string *conf = (struct config_string *)record;
+					if (value)
+					{
+						char *prepared = normalize_struct_value(name, value);
+						char *list;
+						char *old_list = *conf->variable ? *conf->variable : "";
+
+						/* Add value to placeholder patch list */
+						list = guc_malloc(ERROR, strlen(old_list) + strlen(prepared) + 2);
+						sprintf(list, "%s%s;", old_list, prepared);
+
+						pfree(value);
+						value = pstrdup(list);
+						guc_free(list);
+						guc_free(prepared);
+					}
+					tokenize_field_path(name);
+				}
+
 				if (record->vartype == PGC_STRING && newval.stringval != NULL)
+				{
 					guc_free(newval.stringval);
+				}
+				/*
+				 * For struct we replace value with serialized parsed value
+				 * Notice that patch is applied to current value
+				 */
+				if (record->vartype == PGC_STRUCT)
+				{
+					char *serial_struct = NULL;
+					char *struct_name;
+
+					pfree(value);
+					serial_struct = struct_to_str(newval.structval, ((struct config_struct*)record)->type, true);
+					if (serial_struct == NULL)
+						value = NULL;
+					else
+					{
+						value = pstrdup(serial_struct);
+						guc_free(serial_struct);
+					}
+					free_struct(newval.structval, ((struct config_struct*)record)->type);
+
+					/*
+					 * replace name with struct name + "->""
+					 * We need suffix to detect structure in replace_auto_config_value and
+					 * write_auto_conf_file
+					 */
+					name = tokenize_field_path(name);
+					struct_name = (char *)palloc(strlen(name) + 3); /* 3 = len of "->\0" */
+					sprintf(struct_name, "%s->", name);
+					pfree(name);
+					name = struct_name;
+				}
 				guc_free(newextra);
 			}
 		}
@@ -4724,6 +5394,25 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 			 * value.)
 			 */
 			(void) assignable_custom_variable_name(name, false, ERROR);
+
+			/*
+			 * If option is structure, we can understand it with "->" or "[]" in name
+			 */
+			if (strchr(name,'-') || strchr(name, '['))
+			{
+				char *prepared = normalize_struct_value(name, value);
+
+				pfree(value);
+				value = pstrdup(prepared);
+				guc_free(prepared);
+
+				/*
+				 * prepare name to replace_auto_config_value
+				 * We set -> at the end of name to distinguish
+				 * placeholders for structures
+				 */
+				tokenize_field_path(name);
+			}
 		}
 
 		/*
@@ -4790,6 +5479,7 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 		 * not present.
 		 */
 		replace_auto_config_value(&head, &tail, name, value);
+
 	}
 
 	/*
@@ -4934,6 +5624,13 @@ define_custom_variable(struct config_generic *variable)
 	const char *name = variable->name;
 	GUCHashEntry *hentry;
 	struct config_string *pHolder;
+	char *name_suffix = (char *)name;
+
+	if (variable->vartype == PGC_STRUCT)
+	{
+		name_suffix = guc_malloc(ERROR, strlen(name) + 3);
+		sprintf(name_suffix, "%s->", name);
+	}
 
 	/* Check mapping between initial and default value */
 	Assert(check_GUC_init(variable));
@@ -4999,7 +5696,7 @@ define_custom_variable(struct config_generic *variable)
 
 	/* First, apply the reset value if any */
 	if (pHolder->reset_val)
-		(void) set_config_option_ext(name, pHolder->reset_val,
+		(void) set_config_option_ext(name_suffix, pHolder->reset_val,
 									 pHolder->gen.reset_scontext,
 									 pHolder->gen.reset_source,
 									 pHolder->gen.reset_srole,
@@ -5028,6 +5725,9 @@ define_custom_variable(struct config_generic *variable)
 	set_string_field(pHolder, &pHolder->reset_val, NULL);
 
 	guc_free(pHolder);
+
+	if (name_suffix != name)
+		guc_free(name_suffix);
 }
 
 /*
@@ -5047,6 +5747,13 @@ reapply_stacked_values(struct config_generic *variable,
 {
 	const char *name = variable->name;
 	GucStack   *oldvarstack = variable->stack;
+	char *name_suffix = (char *)name;
+
+	if (variable->vartype == PGC_STRUCT)
+	{
+		name_suffix = guc_malloc(ERROR, strlen(name) + 3);
+		sprintf(name_suffix, "%s->", name);
+	}
 
 	if (stack != NULL)
 	{
@@ -5059,21 +5766,21 @@ reapply_stacked_values(struct config_generic *variable,
 		switch (stack->state)
 		{
 			case GUC_SAVE:
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_SAVE, true,
 											 WARNING, false);
 				break;
 
 			case GUC_SET:
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_SET, true,
 											 WARNING, false);
 				break;
 
 			case GUC_LOCAL:
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_LOCAL, true,
 											 WARNING, false);
@@ -5081,14 +5788,14 @@ reapply_stacked_values(struct config_generic *variable,
 
 			case GUC_SET_LOCAL:
 				/* first, apply the masked value as SET */
-				(void) set_config_option_ext(name, stack->masked.val.stringval,
+				(void) set_config_option_ext(name_suffix, stack->masked.val.stringval,
 											 stack->masked_scontext,
 											 PGC_S_SESSION,
 											 stack->masked_srole,
 											 GUC_ACTION_SET, true,
 											 WARNING, false);
 				/* then apply the current value as LOCAL */
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_LOCAL, true,
 											 WARNING, false);
@@ -5114,7 +5821,7 @@ reapply_stacked_values(struct config_generic *variable,
 			cursource != pHolder->gen.reset_source ||
 			cursrole != pHolder->gen.reset_srole)
 		{
-			(void) set_config_option_ext(name, curvalue,
+			(void) set_config_option_ext(name_suffix, curvalue,
 										 curscontext, cursource, cursrole,
 										 GUC_ACTION_SET, true, WARNING, false);
 			if (variable->stack != NULL)
@@ -5124,6 +5831,9 @@ reapply_stacked_values(struct config_generic *variable,
 			}
 		}
 	}
+
+	if (name != name_suffix)
+		guc_free(name_suffix);
 }
 
 /*
@@ -5268,6 +5978,64 @@ DefineCustomEnumVariable(const char *name,
 	define_custom_variable(&var->gen);
 }
 
+void
+DefineCustomStructVariable(const char *name,
+						   const char *short_desc,
+						   const char *long_desc,
+						   const char *type,
+						   void *valueAddr,
+						   const void *bootValueAddr,
+						   GucContext context,
+						   int flags,
+						   GucStructCheckHook check_hook,
+						   GucStructAssignHook assign_hook,
+						   GucShowHook show_hook)
+{
+	struct config_struct *var;
+
+	var = (struct config_struct *)
+		init_custom_variable(name, short_desc, long_desc, context, flags,
+							 PGC_STRUCT, sizeof(struct config_struct));
+	var->variable = valueAddr;
+	var->type = type;
+	var->boot_val = bootValueAddr;
+	var->check_hook = check_hook;
+	var->assign_hook = assign_hook;
+	var->show_hook = show_hook;
+	if (is_static_array_type(var->type)) {
+		var->definition = NULL;
+	} else {
+		var->definition = get_type_definition(var->type);
+	}
+	define_custom_variable(&var->gen);
+}
+
+void DefineCustomStructType(const char *type, const char *signature) {
+	bool found;
+	int check;
+	OptionTypeHashEntry *type_hentry;
+	const char *built_in_types[] = {"bool", "int", "real", "enum", "string"};
+	struct type_definition *type_definition = (struct type_definition *) guc_malloc(ERROR, sizeof(struct type_definition));
+	memset(type_definition, 0, sizeof(struct type_definition));
+	type_definition->type = type;
+	type_definition->signature = signature;
+	type_hentry = (OptionTypeHashEntry *) hash_search(guc_types_hashtab,
+		&type_definition->type,
+		HASH_ENTER,
+		&found);
+
+		Assert(!found);
+	type_hentry->definition = type_definition;
+
+	check = 1;
+	for (int j = 0; j < CNT_SIMPLE_TYPES; j++) {
+		check *= strcmp(type_definition->type, built_in_types[j]);
+	}
+	if (check) {
+		init_type_definition(type_definition);
+	}
+}
+
 /*
  * Mark the given GUC prefix as "reserved".
  *
@@ -5408,6 +6176,21 @@ get_explain_guc_options(int *num)
 					modified = (lconf->boot_val != *(lconf->variable));
 				}
 				break;
+			case PGC_STRUCT:
+				{
+					struct config_struct *lconf = (struct config_struct *) conf;
+
+					if (lconf->boot_val == NULL &&
+						lconf->variable == NULL)
+						modified = false;
+					else if (lconf->boot_val == NULL ||
+							 lconf->variable == NULL)
+					   modified = true;
+					else {
+						modified = (struct_cmp(lconf->boot_val, lconf->variable, lconf->type) != 0);
+					}
+				}
+				break;
 
 			default:
 				elog(ERROR, "unexpected GUC type: %d", conf->vartype);
@@ -5433,6 +6216,8 @@ char *
 GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 {
 	struct config_generic *record;
+	char *start_path_m = strchr(name, '-');
+	char *start_path_b = strchr(name,'[');
 
 	record = find_option(name, false, missing_ok, ERROR);
 	if (record == NULL)
@@ -5451,6 +6236,36 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 
 	if (varname)
 		*varname = record->name;
+
+	/*
+	 * For structure fields we use custom show function.
+	 * yes it's so sloppy but SHowGucOption can't use string as parameter
+	 */
+	if (start_path_m || start_path_b)
+	{
+		void *structp = NULL;
+		char *field_type;
+		char *str_opt;
+		char *result;
+		struct config_struct *conf = (struct config_struct *)record;
+		if (conf->show_hook)
+			result = pstrdup(conf->show_hook());
+		else
+		{
+			/* find start of structure and convert it to struct */
+			structp = get_nest_field_ptr(conf->variable, conf->type, name);
+			field_type = get_nest_field_type(conf->type, name);
+			str_opt = struct_to_str(structp, field_type, false);
+
+			/* copy result */
+			result = pstrdup(str_opt);
+
+			/* free work structures */
+			guc_free(field_type);
+			guc_free(str_opt);
+		}
+		return result;
+	}
 
 	return ShowGUCOption(record, true);
 }
@@ -5559,12 +6374,30 @@ ShowGUCOption(struct config_generic *record, bool use_units)
 			}
 			break;
 
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) record;
+
+				if (conf->show_hook)
+					val = conf->show_hook();
+				else if (conf->variable)
+				{
+					char *result;
+					char *value = struct_to_str(conf->variable, conf->type, false);
+
+					result = pstrdup(value);
+					guc_free(value);
+					return result; /* yes it's awful, so the shortest way that I found */
+				}
+				else
+					val = "nil";
+			}
+			break;
 		default:
 			/* just to keep compiler quiet */
 			val = "???";
 			break;
 	}
-
 	return pstrdup(val);
 }
 
@@ -5635,6 +6468,19 @@ write_one_nondefault_variable(FILE *fp, struct config_generic *gconf)
 
 				fprintf(fp, "%s",
 						config_enum_lookup_by_value(conf, *conf->variable));
+			}
+			break;
+
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+
+				if (conf->variable)
+				{
+					char *serialized = struct_to_str(conf->variable, conf->type, false);
+					fprintf(fp, "%s", serialized);
+					guc_free(serialized);
+				}
 			}
 			break;
 	}
@@ -5919,6 +6765,16 @@ estimate_variable_size(struct config_generic *gconf)
 				valsize = strlen(config_enum_lookup_by_value(conf, *conf->variable));
 			}
 			break;
+
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+
+				if (conf->variable)
+					valsize = get_length_struct_str(conf->variable, conf->type);
+				else
+					valsize = 0;
+			}
 	}
 
 	/* Allow space for terminating zero-byte for value */
@@ -6077,6 +6933,14 @@ serialize_variable(char **destptr, Size *maxbytes,
 							 config_enum_lookup_by_value(conf, *conf->variable));
 			}
 			break;
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+
+				char *struct_str = struct_to_str(conf->variable, conf->type, false);
+				do_serialize(destptr, maxbytes, "%s", struct_str);
+				guc_free(struct_str);
+			}
 	}
 
 	do_serialize(destptr, maxbytes, "%s",
@@ -6290,6 +7154,17 @@ RestoreGUCState(void *gucstate)
 				{
 					struct config_enum *conf = (struct config_enum *) gconf;
 
+					if (conf->reset_extra && conf->reset_extra != gconf->extra)
+						guc_free(conf->reset_extra);
+					break;
+				}
+			case PGC_STRUCT:
+				{
+					struct config_struct *conf = (struct config_struct *)gconf;
+
+					free_struct(conf->variable, conf->type);
+					if (conf->reset_val && conf->reset_val != conf->variable)
+						free_struct(conf->reset_val, conf->type);
 					if (conf->reset_extra && conf->reset_extra != gconf->extra)
 						guc_free(conf->reset_extra);
 					break;
@@ -6980,4 +7855,54 @@ call_enum_check_hook(struct config_enum *conf, int *newval, void **extra,
 	}
 
 	return true;
+}
+
+static bool
+call_struct_check_hook(struct config_struct *conf, void *newval, void **extra,
+						GucSource source, int elevel)
+{
+	volatile bool result = true;
+
+	/* Quick success if no hook */
+	if (!conf->check_hook)
+		return true;
+
+	/*
+	 * If elevel is ERROR, or if the check_hook itself throws an elog
+	 * (undesirable, but not always avoidable), make sure we don't leak the
+	 * already-malloc'd newval struct.
+	 */
+	PG_TRY();
+	{
+		/* Reset variables that might be set by hook */
+		GUC_check_errcode_value = ERRCODE_INVALID_PARAMETER_VALUE;
+		GUC_check_errmsg_string = NULL;
+		GUC_check_errdetail_string = NULL;
+		GUC_check_errhint_string = NULL;
+
+		if (!conf->check_hook(newval, extra, source))
+		{
+			ereport(elevel,
+					(errcode(GUC_check_errcode_value),
+					 GUC_check_errmsg_string ?
+					 errmsg_internal("%s", GUC_check_errmsg_string) :
+					 errmsg("invalid value for parameter \"%s\": %s",
+							conf->gen.name, newval ? struct_to_str(newval, conf->type, false) : ""),
+					 GUC_check_errdetail_string ?
+					 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
+					 GUC_check_errhint_string ?
+					 errhint("%s", GUC_check_errhint_string) : 0));
+			/* Flush any strings created in ErrorContext */
+			FlushErrorState();
+			result = false;
+		}
+	}
+	PG_CATCH();
+	{
+		guc_free(newval);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	return result;
 }

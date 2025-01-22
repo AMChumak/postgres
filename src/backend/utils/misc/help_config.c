@@ -35,6 +35,7 @@ typedef union
 	struct config_int integer;
 	struct config_string string;
 	struct config_enum _enum;
+	struct config_struct _struct;
 } mixedStruct;
 
 
@@ -125,6 +126,12 @@ printMixedStruct(mixedStruct *structToPrint)
 											   structToPrint->_enum.boot_val));
 			break;
 
+		case PGC_STRUCT:
+			char *valstr = NULL;
+			valstr = struct_to_str(structToPrint->_struct.boot_val, structToPrint->_struct.type, false);
+			printf("STRUCT %s\t%s\t\t\t",structToPrint->_struct.type, valstr);
+			guc_free(valstr);
+			break;
 		default:
 			write_stderr("internal error: unrecognized run-time parameter type\n");
 			break;

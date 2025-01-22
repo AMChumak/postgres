@@ -76,15 +76,25 @@ typedef struct BitString
 	char	   *bsval;
 } BitString;
 
+typedef struct SerializedStruct
+{
+	pg_node_attr(special_read_write)
+
+	NodeTag		type;
+	char	   *sval;
+} SerializedStruct;
+
 #define intVal(v)		(castNode(Integer, v)->ival)
 #define floatVal(v)		atof(castNode(Float, v)->fval)
 #define boolVal(v)		(castNode(Boolean, v)->boolval)
 #define strVal(v)		(castNode(String, v)->sval)
+#define structVal(v)	(castNode(SerializedStruct, v)->sval)
 
 extern Integer *makeInteger(int i);
 extern Float *makeFloat(char *numericStr);
 extern Boolean *makeBoolean(bool val);
 extern String *makeString(char *str);
 extern BitString *makeBitString(char *str);
+extern SerializedStruct *makeSerializedStruct(char *str);
 
 #endif							/* VALUE_H */

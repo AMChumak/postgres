@@ -83,10 +83,13 @@ LETTER			[A-Za-z_\200-\377]
 LETTER_OR_DIGIT [A-Za-z_0-9\200-\377]
 
 ID				{LETTER}{LETTER_OR_DIGIT}*
-QUALIFIED_ID	{ID}"."{ID}
+DEREF           "->"
+INDEX           "["{DIGIT}+"]"
+AID             {ID}({DEREF}{ID}|{INDEX})*
+QUALIFIED_ID	{ID}"."{AID}
 
-UNQUOTED_STRING {LETTER}({LETTER_OR_DIGIT}|[-._:/])*
 STRING			\'([^'\\\n]|\\.|\'\')*\'
+UNQUOTED_STRING ({LETTER}|\{|\[)({LETTER_OR_DIGIT}|{STRING}|[-._:/\,\[\]\{\}\ ])*({LETTER_OR_DIGIT}|\}|\])
 
 %%
 
@@ -94,7 +97,7 @@ STRING			\'([^'\\\n]|\\.|\'\')*\'
 [ \t\r]+		/* eat whitespace */
 #.*				/* eat comment (.* matches anything until newline) */
 
-{ID}			return GUC_ID;
+{AID}			return GUC_ID;
 {QUALIFIED_ID}	return GUC_QUALIFIED_ID;
 {STRING}		return GUC_STRING;
 {UNQUOTED_STRING} return GUC_UNQUOTED_STRING;
@@ -421,7 +424,19 @@ ParseConfigFp(FILE *fp, const char *config_file, int depth, int elevel,
 		if (token == GUC_STRING)	/* strip quotes and escapes */
 			opt_value = DeescapeQuotedString(yytext);
 		else
+		{
 			opt_value = pstrdup(yytext);
+
+			if (token == GUC_UNQUOTED_STRING && (opt_value[0] == '{' || opt_value[0] == '['))
+			{
+				/* mark name as structure */
+				char *struct_name = (char *)palloc(strlen(opt_name) + 3); /* 3 = len of "->\0" */
+				struct_name[0] = 0;
+				strcat(strcat(struct_name, opt_name), "->");
+				pfree(opt_name);
+				opt_name = struct_name;
+			}
+		}
 
 		/* now we'd like an end of line, or possibly EOF */
 		token = yylex(scanner);

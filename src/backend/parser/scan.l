@@ -283,7 +283,7 @@ xqinside		[^']+
  * fails to match its trailing "$".
  */
 dolq_start		[A-Za-z\200-\377_]
-dolq_cont		[A-Za-z\200-\377_0-9]
+dolq_cont		[A-Za-z\200-\377_0-9\-\>\[\]]
 dolqdelim		\$({dolq_start}{dolq_cont}*)?\$
 dolqfailed		\${dolq_start}{dolq_cont}*
 dolqinside		[^$]+
@@ -329,10 +329,7 @@ xcstart			\/\*{op_chars}*
 xcstop			\*+\/
 xcinside		[^*/]+
 
-ident_start		[A-Za-z\200-\377_]
-ident_cont		[A-Za-z\200-\377_0-9\$]
 
-identifier		{ident_start}{ident_cont}*
 
 /* Assorted special-case operators and operator-like tokens */
 typecast		"::"
@@ -363,7 +360,7 @@ not_equals		"!="
  * If you change either set, adjust the character lists appearing in the
  * rule for "operator"!
  */
-self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
+self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=\{\}]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
@@ -400,6 +397,13 @@ realfail		({decinteger}|{numeric})[Ee][-+]
 
 /* Positional parameters don't accept underscores. */
 param			\${decdigit}+
+
+
+ident_start		[A-Za-z\200-\377_]
+ident_cont		[A-Za-z\200-\377_0-9]
+dereference "->"
+identifier		{ident_start}({ident_cont}|\$)*
+
 
 /*
  * An identifier immediately following an integer literal is disallowed because
@@ -883,6 +887,12 @@ other			.
 					return yytext[0];
 				}
 
+{dereference} {
+		SET_YYLLOC();
+		return DEREF;
+}
+
+
 {operator}		{
 					/*
 					 * Check for embedded slash-star or dash-dash; those
@@ -955,7 +965,7 @@ other			.
 						 * that the "self" rule would have.
 						 */
 						if (nchars == 1 &&
-							strchr(",()[].;:+-*/%^<>=", yytext[0]))
+							strchr(",()[].;:+-*/%^<>={}", yytext[0]))
 							return yytext[0];
 						/*
 						 * Likewise, if what we have left is two chars, and

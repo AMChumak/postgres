@@ -185,12 +185,14 @@ typedef bool (*GucIntCheckHook) (int *newval, void **extra, GucSource source);
 typedef bool (*GucRealCheckHook) (double *newval, void **extra, GucSource source);
 typedef bool (*GucStringCheckHook) (char **newval, void **extra, GucSource source);
 typedef bool (*GucEnumCheckHook) (int *newval, void **extra, GucSource source);
+typedef bool (*GucStructCheckHook) (void *newval, void **extra, GucSource source);
 
 typedef void (*GucBoolAssignHook) (bool newval, void *extra);
 typedef void (*GucIntAssignHook) (int newval, void *extra);
 typedef void (*GucRealAssignHook) (double newval, void *extra);
 typedef void (*GucStringAssignHook) (const char *newval, void *extra);
 typedef void (*GucEnumAssignHook) (int newval, void *extra);
+typedef void (*GucStructAssignHook) (void *newval, void *extra);
 
 typedef const char *(*GucShowHook) (void);
 
@@ -242,6 +244,13 @@ typedef enum
 #define GUC_UNIT_TIME		 0x70000000 /* mask for time-related units */
 
 #define GUC_UNIT			 (GUC_UNIT_MEMORY | GUC_UNIT_TIME)
+
+
+/*
+ * Precision with which REAL type guc values are to be printed for GUC
+ * serialization.
+ */
+#define REALTYPE_PRECISION 17
 
 
 /* GUC vars that are actually defined in guc_tables.c, rather than elsewhere */
@@ -300,6 +309,8 @@ extern PGDLLIMPORT int tcp_user_timeout;
 extern PGDLLIMPORT char *role_string;
 extern PGDLLIMPORT bool in_hot_standby_guc;
 extern PGDLLIMPORT bool trace_sort;
+
+extern PGDLLIMPORT int expand_array_view_thd;
 
 #ifdef DEBUG_BOUNDED_SORT
 extern PGDLLIMPORT bool optimize_bounded_sort;
@@ -389,6 +400,20 @@ extern void DefineCustomEnumVariable(const char *name,
 									 GucEnumAssignHook assign_hook,
 									 GucShowHook show_hook) pg_attribute_nonnull(1, 4);
 
+extern void DefineCustomStructVariable(const char *name,
+									const char *short_desc,
+									const char *long_desc,
+									const char *type,
+									void *valueAddr,
+									const void *bootValueAddr,
+									GucContext context,
+									int flags,
+									GucStructCheckHook check_hook,
+									GucStructAssignHook assign_hook,
+									GucShowHook show_hook);
+
+extern void DefineCustomStructType(const char *type, const char *signature);
+
 extern void MarkGUCPrefixReserved(const char *className);
 
 /* old name for MarkGUCPrefixReserved, for backwards compatibility: */
@@ -449,6 +474,9 @@ pg_nodiscard extern void *guc_realloc(int elevel, void *old, size_t size);
 extern char *guc_strdup(int elevel, const char *src);
 extern void guc_free(void *ptr);
 
+/*USER TYPES RELATED FUNCTIONS*/
+char *struct_to_str(const void *structp, const char *type, bool serialize);
+
 #ifdef EXEC_BACKEND
 extern void write_nondefault_variables(GucContext context);
 extern void read_nondefault_variables(void);
@@ -462,10 +490,12 @@ extern void RestoreGUCState(void *gucstate);
 /* Functions exported by guc_funcs.c */
 extern void ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel);
 extern char *ExtractSetVariableArgs(VariableSetStmt *stmt);
+extern bool stmt_has_serialized_struct(VariableSetStmt *stmt);
 extern void SetPGVariable(const char *name, List *args, bool is_local);
 extern void GetPGVariable(const char *name, DestReceiver *dest);
 extern TupleDesc GetPGVariableResultDesc(const char *name);
 
+extern int get_declared_types(void);
 /* Support for messages reported from GUC check hooks */
 
 extern PGDLLIMPORT char *GUC_check_errmsg_string;

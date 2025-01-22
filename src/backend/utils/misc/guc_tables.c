@@ -754,10 +754,76 @@ const char *const config_type_names[] =
 	[PGC_REAL] = "real",
 	[PGC_STRING] = "string",
 	[PGC_ENUM] = "enum",
+	[PGC_STRUCT] = "struct"
 };
 
-StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
+StaticAssertDecl(lengthof(config_type_names) == (PGC_STRUCT + 1),
 				 "array length mismatch");
+
+
+/*
+ * Table of user composite types
+ *
+ * See src/backend/utils/misc/README for design notes.
+ *
+ * TO ADD NEW DEFINITION:
+ *
+ * 1.    Decide on a type name
+ *
+ * 2.    Add a record below.
+ *   	 Signature (second field of structure) must be in format:
+ *    	  	"<type_1> <name_1>;<type_2> <name_2>; ... ; <type_K> <name_K>"
+ *    	 	where type_N - one of { bool, int, real, string, <custom_type>}
+ *		 	(custom_type - already defined composite type,
+ *			 array[<number>] - static array,
+ *			 array[] - dynamic array)
+ *
+ * HINT. Do not fill 3 - 6 fields, they will be filled automatically
+ *       in init_type_definition function
+*/
+struct type_definition UserDefinedConfigureTypes[] = {
+	{
+		"bool",
+		NULL,
+		0,
+		4,
+		4,
+		NULL
+	},
+	{
+		"int",
+		NULL,
+		0,
+		4,
+		4,
+		NULL
+	},
+	{
+		"real",
+		NULL,
+		0,
+		8,
+		8,
+		NULL
+	},
+	{
+		"string",
+		NULL,
+		0,
+		8,
+		8,
+		NULL
+	},
+	{
+		"ssn_description",
+		"string mode; string[] names"
+	},
+	/* End-of-list marker */
+	{
+		NULL, NULL
+	}
+};
+
 
 
 /*
@@ -3860,6 +3926,17 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"dyn_array_threshold", PGC_USERSET, CUSTOM_OPTIONS,
+			gettext_noop("Threshold for expand view of dynamic arrays"),
+			gettext_noop("If dynamic array has size bigger than threshold, "
+						"then view will be expanded"),
+		},
+		&expand_array_view_thd,
+		10, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
@@ -5421,5 +5498,22 @@ struct config_enum ConfigureNamesEnum[] =
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, NULL, NULL, NULL, NULL
+	}
+};
+
+struct config_struct ConfigureNamesStruct[] =
+{
+	{{"super_duper_ssn", PGC_USERSET, REPLICATION_PRIMARY,
+		gettext_noop("Number of synchronous standbys and list of names of potential synchronous ones."),
+		NULL},
+		"ssn_description",
+		&SuperDuperSyncStandbyNames,
+		&SuperDuperSyncStandbyNamesBoot,
+		NULL, NULL, NULL, NULL, NULL, NULL
+	},
+
+	/* End-of-list marker */
+	{
+		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 	}
 };

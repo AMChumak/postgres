@@ -11,6 +11,7 @@
  *
  *-------------------------------------------------------------------------
  */
+
 #ifndef GUC_TABLES_H
 #define GUC_TABLES_H 1
 
@@ -27,6 +28,7 @@ enum config_type
 	PGC_REAL,
 	PGC_STRING,
 	PGC_ENUM,
+	PGC_STRUCT,
 };
 
 union config_var_val
@@ -36,6 +38,7 @@ union config_var_val
 	double		realval;
 	char	   *stringval;
 	int			enumval;
+	void 	   *structval;
 };
 
 /*
@@ -298,6 +301,40 @@ struct config_enum
 	void	   *reset_extra;
 };
 
+
+/* work with type signatures */
+
+typedef struct struct_field {
+	char *type;
+	char *name;
+} struct_field;
+
+struct type_definition {
+	/*constant fields*/
+	const char *type;
+	const char *signature;
+	int cnt_fields;
+	int type_size;
+	int offset;
+	struct_field *fields;
+};
+
+struct config_struct
+{
+	struct config_generic gen;
+	/*constant fields, must be set correctly in initial value: */
+	const char *type;
+	void *variable;
+	const void *boot_val;
+	GucStructCheckHook check_hook;
+	GucStructAssignHook assign_hook;
+	GucShowHook show_hook;
+	/* variable fields, initialized at runtime: */
+	void		*reset_val;
+	void	   *reset_extra;
+	const struct type_definition *definition;
+};
+
 /* constant tables corresponding to enums above and in guc.h */
 extern PGDLLIMPORT const char *const config_group_names[];
 extern PGDLLIMPORT const char *const config_type_names[];
@@ -305,11 +342,14 @@ extern PGDLLIMPORT const char *const GucContext_Names[];
 extern PGDLLIMPORT const char *const GucSource_Names[];
 
 /* data arrays defining all the built-in GUC variables */
+extern PGDLLIMPORT struct type_definition UserDefinedConfigureTypes[];
 extern PGDLLIMPORT struct config_bool ConfigureNamesBool[];
 extern PGDLLIMPORT struct config_int ConfigureNamesInt[];
 extern PGDLLIMPORT struct config_real ConfigureNamesReal[];
 extern PGDLLIMPORT struct config_string ConfigureNamesString[];
 extern PGDLLIMPORT struct config_enum ConfigureNamesEnum[];
+extern PGDLLIMPORT struct config_struct ConfigureNamesStruct[];
+
 
 /* lookup GUC variables, returning config_generic pointers */
 extern struct config_generic *find_option(const char *name,
@@ -337,5 +377,7 @@ extern char *config_enum_get_options(struct config_enum *record,
 									 const char *prefix,
 									 const char *suffix,
 									 const char *separator);
+
+
 
 #endif							/* GUC_TABLES_H */

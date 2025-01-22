@@ -102,6 +102,7 @@ extern IndexInfo *makeIndexInfo(int numattrs, int numkeyattrs, Oid amoid,
 								bool summarizing, bool withoutoverlaps);
 
 extern Node *makeStringConst(char *str, int location);
+extern Node *makeSerializedStructConst(char *str, int location);
 extern DefElem *makeDefElem(char *name, Node *arg, int location);
 extern DefElem *makeDefElemExtended(char *nameSpace, char *name, Node *arg,
 									DefElemAction defaction, int location);

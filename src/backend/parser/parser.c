@@ -48,7 +48,6 @@ raw_parser(const char *str, RawParseMode mode)
 	/* initialize the flex scanner */
 	yyscanner = scanner_init(str, &yyextra.core_yy_extra,
 							 &ScanKeywords, ScanKeywordTokens);
-
 	/* base_yylex() only needs us to initialize the lookahead token, if any */
 	if (mode == RAW_PARSE_DEFAULT)
 		yyextra.have_lookahead = false;
@@ -69,13 +68,10 @@ raw_parser(const char *str, RawParseMode mode)
 		yyextra.lookahead_yylloc = 0;
 		yyextra.lookahead_end = NULL;
 	}
-
 	/* initialize the bison parser */
 	parser_init(&yyextra);
-
 	/* Parse! */
 	yyresult = base_yyparse(yyscanner);
-
 	/* Clean up (release memory) */
 	scanner_finish(yyscanner);
 

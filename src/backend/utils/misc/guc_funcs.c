@@ -15,9 +15,10 @@
  */
 #include "postgres.h"
 
+#include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
+#include "utils/guc.h"
 #include "access/xact.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
@@ -55,15 +56,25 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 
 	switch (stmt->kind)
 	{
+		char *prepared_name;
 		case VAR_SET_VALUE:
 		case VAR_SET_CURRENT:
+			if (stmt_has_serialized_struct(stmt))
+			{
+				prepared_name = guc_malloc(ERROR, strlen(stmt->name) + 3);
+				prepared_name[0] = 0;
+				strcat(strcat(prepared_name,stmt->name), "->");
+			}
+			else
+				prepared_name = guc_strdup(ERROR, stmt->name);
 			if (stmt->is_local)
 				WarnNoTransactionBlock(isTopLevel, "SET LOCAL");
-			(void) set_config_option(stmt->name,
+			(void) set_config_option(prepared_name,
 									 ExtractSetVariableArgs(stmt),
 									 (superuser() ? PGC_SUSET : PGC_USERSET),
 									 PGC_S_SESSION,
 									 action, true, 0, false);
+			guc_free(prepared_name);
 			break;
 		case VAR_SET_MULTI:
 
@@ -155,6 +166,39 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 	/* Invoke the post-alter hook for setting this GUC variable, by name. */
 	InvokeObjectPostAlterHookArgStr(ParameterAclRelationId, stmt->name,
 									ACL_SET, stmt->kind, false);
+}
+
+/*
+ * Get arguments of set statement and check if some arguments are
+ * serialized structures
+ */
+bool stmt_has_serialized_struct(VariableSetStmt *stmt)
+{
+	List       *args;
+	ListCell   *l;
+	switch (stmt->kind)
+	{
+		case VAR_SET_VALUE:
+			args = stmt->args;
+			/* Fast path if just DEFAULT */
+			if (args == NIL)
+				return false;
+			/* go throw  args list and check nodeTags */
+			foreach(l, args)
+			{
+				A_Const    *con;
+				Node	   *arg = (Node *) lfirst(l);
+				if (!IsA(arg, A_Const))
+					elog(ERROR, "unrecognized node type: %d", (int) nodeTag(arg));
+				con = (A_Const *) arg;
+
+				if (nodeTag(&con->val) == T_SerializedStruct)
+					return true;
+			}
+			return false;
+		default:
+			return false;
+	}
 }
 
 /*
@@ -294,6 +338,10 @@ flatten_set_variable_args(const char *name, List *args)
 					else
 						appendStringInfoString(&buf, val);
 				}
+				break;
+			case T_SerializedStruct:
+				val = structVal(&con->val);
+				appendStringInfoString(&buf, val);
 				break;
 			default:
 				elog(ERROR, "unrecognized node type: %d",
@@ -618,8 +666,6 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 	/* context */
 	values[6] = GucContext_Names[conf->context];
 
-	/* vartype */
-	values[7] = config_type_names[conf->vartype];
 
 	/* source */
 	values[8] = GucSource_Names[conf->source];
@@ -630,6 +676,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 		case PGC_BOOL:
 			{
 				struct config_bool *lconf = (struct config_bool *) conf;
+
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
 
 				/* min_val */
 				values[9] = NULL;
@@ -651,6 +700,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 		case PGC_INT:
 			{
 				struct config_int *lconf = (struct config_int *) conf;
+
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
 
 				/* min_val */
 				snprintf(buffer, sizeof(buffer), "%d", lconf->min);
@@ -677,6 +729,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 			{
 				struct config_real *lconf = (struct config_real *) conf;
 
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
+
 				/* min_val */
 				snprintf(buffer, sizeof(buffer), "%g", lconf->min);
 				values[9] = pstrdup(buffer);
@@ -701,6 +756,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 		case PGC_STRING:
 			{
 				struct config_string *lconf = (struct config_string *) conf;
+
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
 
 				/* min_val */
 				values[9] = NULL;
@@ -729,6 +787,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 			{
 				struct config_enum *lconf = (struct config_enum *) conf;
 
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
+
 				/* min_val */
 				values[9] = NULL;
 
@@ -751,6 +812,42 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 				/* reset_val */
 				values[13] = pstrdup(config_enum_lookup_by_value(lconf,
 																 lconf->reset_val));
+			}
+			break;
+
+		case PGC_STRUCT:
+			{
+				struct config_struct *lconf = (struct config_struct *) conf;
+				/* vartype */
+				values[7] = palloc((strlen(lconf->type) + 8) * sizeof(char));
+				sprintf((char *)values[7], "%s %s",config_type_names[conf->vartype], lconf->type);
+
+				/* min_val */
+				values[9] = NULL;
+
+				/* max_val */
+				values[10] = NULL;
+
+				/* enumvals */
+				values[11] = NULL;
+				/* boot_val */
+				if (lconf->boot_val == NULL)
+					values[12] = NULL;
+				else
+				{
+					char *boot_v = struct_to_str(lconf->boot_val, lconf->type, false);
+					values[12] = pstrdup(boot_v);
+					guc_free(boot_v);
+				}
+				/* reset_val */
+				if (lconf->reset_val == NULL)
+					values[13] = NULL;
+				else
+				{
+					char *reset = struct_to_str(lconf->reset_val, lconf->type, false);
+					values[13] = pstrdup(reset);
+					guc_free(reset);
+				}
 			}
 			break;
 
@@ -952,13 +1049,10 @@ show_all_settings(PG_FUNCTION_ARGS)
 
 		/* extract values for the current variable */
 		GetConfigOptionValues(conf, (const char **) values);
-
 		/* build a tuple */
 		tuple = BuildTupleFromCStrings(attinmeta, values);
-
 		/* make the tuple into a datum */
 		result = HeapTupleGetDatum(tuple);
-
 		SRF_RETURN_NEXT(funcctx, result);
 	}
 

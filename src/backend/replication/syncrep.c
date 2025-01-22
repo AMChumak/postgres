@@ -89,6 +89,12 @@
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 
+
+
+const char * const ssn_data[] = {"hello", "Dolly"};
+struct SSNDescription SuperDuperSyncStandbyNames;
+struct SSNDescription SuperDuperSyncStandbyNamesBoot = {"FIRST", {ssn_data, 2}};
+
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
 

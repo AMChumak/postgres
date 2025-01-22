@@ -76,6 +76,22 @@ extern PGDLLIMPORT SyncRepConfigData *SyncRepConfig;
 /* user-settable parameters for synchronous replication */
 extern PGDLLIMPORT char *SyncRepStandbyNames;
 
+
+
+struct StringArray {
+	char **strings;
+	int size;
+};
+
+struct SSNDescription  {
+	char *mode;
+	struct StringArray names;
+};
+
+extern PGDLLIMPORT struct SSNDescription SuperDuperSyncStandbyNames;
+extern PGDLLIMPORT struct SSNDescription SuperDuperSyncStandbyNamesBoot;
+
+
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
 

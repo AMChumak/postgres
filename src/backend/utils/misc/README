@@ -292,3 +292,60 @@ worry about NULL values ever, the variable can be given a non-null static
 initializer as well as a non-null boot_val.  guc.c will overwrite the
 static initializer pointer with a copy of the boot_val during
 InitializeGUCOptions, but the variable will never contain a NULL.
+
+
+GUC composite type options
+--------------------------
+
+To use the composite type options, you need to register the types
+used in the system. To do this, add the type description to the guc_tables.c
+file in the UserDefinedConfigureTypes array or use the DefineCustomStructType
+function if you are creating a type from an extension. Note that the sequence
+of fields in the type signature must exactly match the signature
+of the structure in the C code.
+
+The signature syntax is as follows:
+"<type_1> <name_1>;<type_2> <name_2>; ... ; <type_K> <name_K>"
+type_i - type of field.
+name_i - name of field
+
+The field can have a type that is already registered in the system
+(types that are in the array before) or array type of already registered types
+Arrays syntax:
+<type>[<length>] - static array
+<type>[] - dynamic array
+
+Representation in C code of dynamic array is a structure like
+struct DynamicArray
+{
+	void *data;
+	int size;
+};
+It is important to keep the order of the fields, because mapping takes place
+according to the type signature and alignment rules of the C language.
+
+Composite types in the user interface support the syntax:
+option_name = {field_name: field_value, ..., field_name: field_value}
+option_name->field_name = field_value
+option_name = [value, value, ..., value]
+option_name = [<index>: value, ..., <index>: value]
+Similar syntax is used in psql in SET and SHOW commands.
+
+Composite types use incremental value setting semantics.
+When setting a value, you can not specify all fields of the structure/array,
+then the unspecified fields will not change their values.
+Maintaining this semantics for extensions required special processing
+of placeholders for structural values. Instead of rewriting the value
+of the field, we add it using ';'. This preserves the linear order in which
+values are applied.
+
+Since the logic of processing placeholders for composite types differs
+from others, there is a need to distinguish between composite types and
+simple ones. To do this, it is forbidden to wrap a compound type value
+in quotation marks. Inside, the system will add characters "->" to the
+name of such a value, which only structures can have.
+
+In general, the processing of quotation marks for structures differs
+from simple types, since string fields are wrapped in quotation marks
+and the usual Deescape is not suitable for the entire structure.
+Therefore, be careful when changing this logic.
