@@ -296,7 +296,7 @@ struct config_struct
 	/* variable fields, initialized at runtime: */
 	void		*reset_val;
 	void	   *reset_extra;
-}
+};
 
 /* constant tables corresponding to enums above and in guc.h */
 extern PGDLLIMPORT const char *const config_group_names[];
