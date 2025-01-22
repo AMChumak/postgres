@@ -284,11 +284,20 @@ struct config_enum
 	void	   *reset_extra;
 };
 
+
+/* work with type signatures */
+
+struct type_definition {
+	/*constant fields*/
+	char *type;
+	char *signature;
+};
+
 struct config_struct
 {
 	struct config_generic gen;
 	/*constant fields, must be set correctly in initial value: */
-	const char *signature;
+	const struct type_definition *definition;
 	void *variable;
 	const void *boot_val;
 	GucStructCheckHook check_hook;

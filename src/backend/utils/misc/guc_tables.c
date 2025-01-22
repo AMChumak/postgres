@@ -742,6 +742,27 @@ StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
 
 
 /*
+ * Table of user types
+ *
+ * TO ADD AN DEFINITION:
+ *
+ * 1. Decide on a type name
+ *
+ * 2. Add a record below. Signature must be in format:
+ *    "<type_1> <field_name_1>;<type_2> <field_name_2>; ..."
+ *    where type_N - one of { bool, int, real, string, enum, struct <name_struct>} (name_struct - name of already defined struct type)
+*/
+
+struct type_definition UserDefinedTypes[] = {
+	{
+		"node",
+		"string name;int max_connections_count;bool is_alive;real timeout"
+	}
+}
+
+
+
+/*
  * Contents of GUC tables
  *
  * See src/backend/utils/misc/README for design notes.
