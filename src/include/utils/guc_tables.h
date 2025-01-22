@@ -11,6 +11,7 @@
  *
  *-------------------------------------------------------------------------
  */
+#include "guc.h"
 #ifndef GUC_TABLES_H
 #define GUC_TABLES_H 1
 
@@ -27,6 +28,7 @@ enum config_type
 	PGC_REAL,
 	PGC_STRING,
 	PGC_ENUM,
+	PGC_STRUCT,
 };
 
 union config_var_val
@@ -36,6 +38,7 @@ union config_var_val
 	double		realval;
 	char	   *stringval;
 	int			enumval;
+	void 	   *structval;
 };
 
 /*
@@ -281,6 +284,20 @@ struct config_enum
 	void	   *reset_extra;
 };
 
+struct config_struct
+{
+	struct config_generic gen;
+	/*constant fields, must be set correctly in initial value: */
+	const char *signature;
+	void *variable;
+	const void *boot_val;
+	GucStructCheckHook check_hook;
+	GucShowHook show_hook;
+	/* variable fields, initialized at runtime: */
+	void		*reset_val;
+	void	   *reset_extra;
+}
+
 /* constant tables corresponding to enums above and in guc.h */
 extern PGDLLIMPORT const char *const config_group_names[];
 extern PGDLLIMPORT const char *const config_type_names[];
@@ -293,6 +310,7 @@ extern PGDLLIMPORT struct config_int ConfigureNamesInt[];
 extern PGDLLIMPORT struct config_real ConfigureNamesReal[];
 extern PGDLLIMPORT struct config_string ConfigureNamesString[];
 extern PGDLLIMPORT struct config_enum ConfigureNamesEnum[];
+
 
 /* lookup GUC variables, returning config_generic pointers */
 extern struct config_generic *find_option(const char *name,
