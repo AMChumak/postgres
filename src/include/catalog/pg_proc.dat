@@ -6652,6 +6652,10 @@
   proname => 'pg_wal_lsn_diff', prorettype => 'numeric',
   proargtypes => 'pg_lsn pg_lsn', prosrc => 'pg_wal_lsn_diff' },
 
+{oid => '10003', descr => 'gets size of user types table',
+  proname => 'get_count_user_types', prorettype => 'void',
+  proargtypes => '', prosrc => 'get_count_user_types'},
+
 { oid => '3809', descr => 'export a snapshot',
   proname => 'pg_export_snapshot', provolatile => 'v', proparallel => 'u',
   prorettype => 'text', proargtypes => '', prosrc => 'pg_export_snapshot' },

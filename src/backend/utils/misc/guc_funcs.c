@@ -1045,3 +1045,12 @@ show_all_file_settings(PG_FUNCTION_ARGS)
 
 	return (Datum) 0;
 }
+
+
+/*TEST FUNCTIONS FOR CONFIG*/
+
+Datum
+get_count_user_types(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT32(get_declared_types);
+}

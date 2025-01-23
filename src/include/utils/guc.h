@@ -463,6 +463,7 @@ extern void SetPGVariable(const char *name, List *args, bool is_local);
 extern void GetPGVariable(const char *name, DestReceiver *dest);
 extern TupleDesc GetPGVariableResultDesc(const char *name);
 
+extern int get_declared_types(void);
 /* Support for messages reported from GUC check hooks */
 
 extern PGDLLIMPORT char *GUC_check_errmsg_string;

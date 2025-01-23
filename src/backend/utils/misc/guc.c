@@ -198,6 +198,14 @@ static const char *const map_old_guc_names[] = {
 /* Memory context holding all GUC-related data */
 static MemoryContext GUCMemoryContext;
 
+typedef struct
+{
+	const char *typename;
+	struct type_definition *definition;
+} OptionTypeHashEntry;
+
+static HTAB *guc_types_hashtab;
+
 /*
  * We use a dynahash table to look up GUCs by name, or to iterate through
  * all the GUCs.  The gucname field is redundant with gucvar->name, but
@@ -210,6 +218,7 @@ typedef struct
 } GUCHashEntry;
 
 static HTAB *guc_hashtab;		/* entries are GUCHashEntrys */
+
 
 /*
  * In addition to the hash table, variables having certain properties are
@@ -269,6 +278,7 @@ static bool call_string_check_hook(struct config_string *conf, char **newval,
 								   void **extra, GucSource source, int elevel);
 static bool call_enum_check_hook(struct config_enum *conf, int *newval,
 								 void **extra, GucSource source, int elevel);
+
 
 
 /*
@@ -906,6 +916,13 @@ build_guc_variables(void)
 	int			num_vars = 0;
 	HASHCTL		hash_ctl;
 	GUCHashEntry *hentry;
+
+
+	int			size_types;
+	int         num_types = 0;
+	HASHCTL		types_hash_ctl;
+	OptionTypeHashEntry *type_hentry;
+
 	bool		found;
 	int			i;
 
@@ -916,6 +933,14 @@ build_guc_variables(void)
 	GUCMemoryContext = AllocSetContextCreate(TopMemoryContext,
 											 "GUCMemoryContext",
 											 ALLOCSET_DEFAULT_SIZES);
+
+	/*
+	 * Count all type defintions
+	 */
+	for (i = 0; UserDefinedConfigureTypes[i].type; i++)
+	{
+		num_types++;
+	}
 
 	/*
 	 * Count all the built-in variables, and set their vartypes correctly.
@@ -961,9 +986,36 @@ build_guc_variables(void)
 		num_vars++;
 	}
 
+
 	/*
-	 * Create hash table with 20% slack
+	 * Create hash tables with 20% slack
 	 */
+
+	size_types = num_types + num_types / 4; //it is 25% slack. isn't it?
+	types_hash_ctl.keysize = sizeof(char *);
+	types_hash_ctl.entrysize = sizeof(OptionTypeHashEntry);
+	types_hash_ctl.hash = guc_name_hash;
+	hash_ctl.match = guc_name_match;
+	hash_ctl.hcxt = GUCMemoryContext;
+	guc_types_hashtab = hash_create("GUC user types hash table",
+							  size_vars,
+							  &hash_ctl,
+							  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
+
+	for (i = 0; UserDefinedConfigureTypes[i].type; i++)
+	{
+		OptionTypeHashEntry *type_definition = &UserDefinedConfigureTypes[i];
+
+		type_hentry = (OptionTypeHashEntry *) hash_search(guc_types_hashtab,
+											  &type_definition->typename,
+											  HASH_ENTER,
+											  &found);
+		Assert(!found);
+		type_hentry->definition = type_definition;
+	}
+
+	Assert(num_types == hash_get_num_entries(guc_types_hashtab));
+
 	size_vars = num_vars + num_vars / 4;
 
 	hash_ctl.keysize = sizeof(char *);
@@ -1037,6 +1089,10 @@ build_guc_variables(void)
 	}
 
 	Assert(num_vars == hash_get_num_entries(guc_hashtab));
+}
+
+int get_declared_types(void) {
+	return hash_get_num_entries(guc_hashtab);
 }
 
 /*

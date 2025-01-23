@@ -314,6 +314,7 @@ extern PGDLLIMPORT const char *const GucContext_Names[];
 extern PGDLLIMPORT const char *const GucSource_Names[];
 
 /* data arrays defining all the built-in GUC variables */
+extern PGDLLIMPORT struct type_definition UserDefinedConfigureTypes[];
 extern PGDLLIMPORT struct config_bool ConfigureNamesBool[];
 extern PGDLLIMPORT struct config_int ConfigureNamesInt[];
 extern PGDLLIMPORT struct config_real ConfigureNamesReal[];

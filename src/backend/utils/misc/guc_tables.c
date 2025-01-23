@@ -753,12 +753,16 @@ StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
  *    where type_N - one of { bool, int, real, string, enum, struct <name_struct>} (name_struct - name of already defined struct type)
 */
 
-struct type_definition UserDefinedTypes[] = {
+struct type_definition UserDefinedConfigureTypes[] = {
 	{
 		"node",
 		"string name;int max_connections_count;bool is_alive;real timeout"
+	},
+	/* End-of-list marker */
+	{
+		NULL, NULL
 	}
-}
+};
 
 
 

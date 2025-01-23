@@ -383,6 +383,10 @@ BEGIN ATOMIC
     SELECT * FROM ts_debug(get_current_ts_config(), $1);
 END;
 
+CREATE OR REPLACE FUNCTION get_count_user_types()
+  RETURNS integer
+  LANGUAGE internal AS 'get_count_user_types'
+
 CREATE OR REPLACE FUNCTION
   pg_backup_start(label text, fast boolean DEFAULT false)
   RETURNS pg_lsn STRICT VOLATILE LANGUAGE internal AS 'pg_backup_start'
