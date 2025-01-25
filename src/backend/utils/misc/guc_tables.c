@@ -813,11 +813,7 @@ struct type_definition UserDefinedConfigureTypes[] = {
 	},
 	{
 		"node",
-		"string name;int max_connections_count;bool is_alive;real timeout",
-		4,
-		24,
-		8,
-		test_data
+		"string name;int max_connections_count;bool is_alive;real timeout"
 	},
 	/* End-of-list marker */
 	{

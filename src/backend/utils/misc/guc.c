@@ -925,7 +925,8 @@ build_guc_variables(void)
 	int         num_types = 0;
 	HASHCTL		types_hash_ctl;
 	OptionTypeHashEntry *type_hentry;
-
+	const char *built_in_types[] = {"bool", "int", "real", "enum", "string"};
+	int cnt_built_in_types = 5;
 	bool		found;
 	int			i;
 
@@ -1015,6 +1016,14 @@ build_guc_variables(void)
 											  &found);
 		Assert(!found);
 		type_hentry->definition = type_definition;
+
+		int check = 1;
+		for (int j = 0; j < cnt_built_in_types; j++) {
+			check *= strcmp(type_definition->type, built_in_types[j]);
+		}
+		if (check) { //we mark user type structures up
+			init_type_definition(type_definition);
+		}
 	}
 
 	Assert(num_types == hash_get_num_entries(guc_types_hashtab));
@@ -3248,6 +3257,28 @@ int get_type_memory_size(const char* type_name ) {
 	return struct_type->type_size;
 }
 
+int get_type_offset(const char *type_name) {
+	if (!type_name)
+		return -1;
+
+	//ARRAY CASE
+	if (is_array_type(type_name)) {
+		char *basic_type = get_type_of_array(type_name);
+		struct type_definition *basic_type_def = try_find_type(basic_type);
+		guc_free(basic_type);
+		if (!(basic_type_def))
+			return -1;
+		return basic_type_def->offset;
+	}
+
+	//STRUCT CASE
+
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type_name)))
+		return NULL;
+	return struct_type->offset;
+}
+
 
 char *get_field_type_name(const char * type_name, const char *field) {
 	if (!type_name || !field)
@@ -3364,6 +3395,117 @@ int get_field_offset(const char * type_name, const char *field) {
 	if(i < struct_type->cnt_fields)
 		return total_offset;
 	return -1;
+}
+
+void alloc_n_copy(char **allocated_str) {
+	if (!allocated_str)
+		return NULL;
+	unsigned long len = strlen(*allocated_str);
+	char *new_str = (char *)guc_malloc(ERROR, len + 1);
+	strncpy(new_str, *allocated_str, len+1);
+	*allocated_str = new_str;
+}
+
+void init_type_definition(struct type_definition *definition) {
+	const char *def_del = ";", *word_del = " ";
+	int max_offset = 0;
+	int count_fields = 0;
+
+	//count fields in signature
+	char *sym = definition->signature;
+	if (!sym || !*sym) {
+		elog (ERROR, "signature of %s is empty", definition->type);
+		return;
+	}
+
+	count_fields = 1;
+	while (*sym) {
+		if (*sym == def_del[0])
+			count_fields++;
+		sym++;
+	}
+
+	//allocate structures for field definitions
+
+	struct_field *fields = (struct_field *)guc_malloc(ERROR, count_fields * sizeof(struct_field));
+
+	//parse string
+	char *signature_saveptr, *field_def_saveptr;
+	char *signature,*field_def;
+	char *field_def_token, *word_token;
+	int curr_off = 0;
+	int i;
+
+	signature = definition->signature;
+	alloc_n_copy(&signature);
+
+	for (i = 0; ; i++, signature = NULL) {
+		field_def_token = strtok_r(signature, def_del, &signature_saveptr);
+		if (!field_def_token) {
+			break;
+		}
+
+		int word_cnt = 0;
+		for (field_def = field_def_token; ; field_def = NULL) {
+			word_token = strtok_r(field_def, word_del, &field_def_saveptr);
+
+			if (!word_token) {
+				if (word_cnt != 2) {
+					elog(ERROR, "wrong field definition: \"%s\" in definition of type %s", field_def_token, definition->type);
+					goto nest_safe_exit;
+				}
+				break;
+			}
+
+			alloc_n_copy(&word_token);
+
+
+			if (!word_token[0]) {
+				guc_free(word_token);
+				word_token = NULL;
+				continue;
+			}
+
+
+			if (word_cnt == 0) { //type
+				fields[i].type = word_token;
+				int type_offset = get_type_offset(word_token);
+				int type_size = get_type_memory_size(word_token);
+				if (type_offset < 0 || type_size < 0) {
+					elog(ERROR, "wrong type \"%s\"is used in field definition: \"%s\" in definition of type %s",word_token, field_def_token, definition->type);
+					goto nest_safe_exit;
+				}
+
+				if (type_offset > max_offset)
+					max_offset = type_offset;
+
+				if (curr_off % type_offset != 0) {
+					curr_off += type_offset - curr_off % type_offset;
+				}
+				curr_off += type_size;
+			} else if (word_cnt == 1) {//name
+				fields[i].name = word_token;
+			} else {
+				elog(ERROR, "wrong field definition: \"%s\" in definition of type %s", field_def_token, definition->type);
+				goto nest_safe_exit;
+			}
+			word_cnt++;
+			word_token = NULL;
+		}
+		field_def_token = NULL;
+	}
+
+	definition->offset = max_offset;
+	definition->type_size = curr_off;
+	definition->cnt_fields = count_fields;
+
+	definition->fields = fields;
+	fields = NULL;
+nest_safe_exit:
+	guc_free(fields);
+	guc_free(word_token);
+	guc_free(signature);
+	return;
 }
 
 /*

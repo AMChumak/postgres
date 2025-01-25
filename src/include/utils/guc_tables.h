@@ -361,5 +361,6 @@ extern char *config_enum_get_options(struct config_enum *record,
 
 extern char *get_field_type_name(const char * type_name, const char *field);
 extern int get_field_offset(const char * type_name, const char *field);
+void init_type_definition(struct type_definition *definition);
 
 #endif							/* GUC_TABLES_H */
