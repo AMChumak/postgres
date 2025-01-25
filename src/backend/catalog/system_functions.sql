@@ -385,7 +385,15 @@ END;
 
 CREATE OR REPLACE FUNCTION get_count_user_types()
   RETURNS integer
-  LANGUAGE internal AS 'get_count_user_types'
+  LANGUAGE internal AS 'get_count_user_types';
+
+CREATE OR REPLACE FUNCTION get_field_type(text,text)
+  RETURNS text
+  LANGUAGE internal AS 'get_field_type';
+
+CREATE OR REPLACE FUNCTION get_field_offset_in_struct()
+  RETURNS integer
+  LANGUAGE internal AS 'get_field_offset_in_struct';
 
 CREATE OR REPLACE FUNCTION
   pg_backup_start(label text, fast boolean DEFAULT false)

@@ -287,10 +287,19 @@ struct config_enum
 
 /* work with type signatures */
 
+typedef struct struct_field {
+	char *type;
+	char *name;
+} struct_field;
+
 struct type_definition {
 	/*constant fields*/
-	char *type;
-	char *signature;
+	const char *type;
+	const char *signature;
+	int cnt_fields;
+	int type_size;
+	int offset;
+	struct_field *fields;
 };
 
 struct config_struct
@@ -348,5 +357,9 @@ extern char *config_enum_get_options(struct config_enum *record,
 									 const char *prefix,
 									 const char *suffix,
 									 const char *separator);
+
+
+extern char *get_field_type_name(const char * type_name, const char *field);
+extern int get_field_offset(const char * type_name, const char *field);
 
 #endif							/* GUC_TABLES_H */

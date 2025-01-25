@@ -24,9 +24,12 @@
  */
 #include "postgres.h"
 
+#include <stdio.h>
+#include <string.h>
 #include <limits.h>
 #include <math.h>
 #include <sys/stat.h>
+#include <sys/ucontext.h>
 #include <unistd.h>
 
 #include "access/xact.h"
@@ -995,19 +998,19 @@ build_guc_variables(void)
 	types_hash_ctl.keysize = sizeof(char *);
 	types_hash_ctl.entrysize = sizeof(OptionTypeHashEntry);
 	types_hash_ctl.hash = guc_name_hash;
-	hash_ctl.match = guc_name_match;
-	hash_ctl.hcxt = GUCMemoryContext;
+	types_hash_ctl.match = guc_name_match;
+	types_hash_ctl.hcxt = GUCMemoryContext;
 	guc_types_hashtab = hash_create("GUC user types hash table",
-							  size_vars,
-							  &hash_ctl,
+							  size_types,
+							  &types_hash_ctl,
 							  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
 
 	for (i = 0; UserDefinedConfigureTypes[i].type; i++)
 	{
-		OptionTypeHashEntry *type_definition = &UserDefinedConfigureTypes[i];
+		struct type_definition *type_definition = &UserDefinedConfigureTypes[i];
 
 		type_hentry = (OptionTypeHashEntry *) hash_search(guc_types_hashtab,
-											  &type_definition->typename,
+											  &type_definition->type,
 											  HASH_ENTER,
 											  &found);
 		Assert(!found);
@@ -1092,7 +1095,7 @@ build_guc_variables(void)
 }
 
 int get_declared_types(void) {
-	return hash_get_num_entries(guc_hashtab);
+	return hash_get_num_entries(guc_types_hashtab);
 }
 
 /*
@@ -3162,6 +3165,205 @@ config_enum_get_options(struct config_enum *record, const char *prefix,
 	appendStringInfoString(&retstr, suffix);
 
 	return retstr.data;
+}
+
+/*FUNCTIONS FOR WORKING WITH USER TYPES TABLE*/
+
+bool is_array_type(const char * type_name) {
+	unsigned long type_name_len = strlen(type_name);
+	if (type_name[type_name_len - 1] == ']')
+		return true;
+	return false;
+}
+
+int get_array_size(const char * array_type_name) {
+	unsigned long array_type_name_len = strlen(array_type_name);
+	unsigned long pos = array_type_name_len - 1;
+	while (array_type_name[pos] != '[') {
+		pos--;
+	}
+	char *size_str = guc_malloc(ERROR, (array_type_name_len - pos - 1) * sizeof(char));
+	strncpy(size_str, array_type_name + pos + 1, array_type_name_len - pos - 2);
+	size_str[array_type_name_len - pos - 2]  = 0;
+	int arr_size = atoi(size_str);
+	guc_free(size_str);
+	return arr_size;
+}
+
+char *get_type_of_array(const char * array_type_name) {
+	unsigned long pos = strlen(array_type_name) - 1;
+	while (array_type_name[pos] != '[') {
+		pos--;
+	}
+	char *type_name = guc_malloc(ERROR, (pos + 1) * sizeof(char));
+	strncpy(type_name, array_type_name, pos);
+	type_name[pos] = 0;
+	return type_name;
+}
+
+
+struct type_definition *try_find_type(const char *type_name) {
+	struct type_definition *definition_ptr;
+	bool found = false;
+	OptionTypeHashEntry *type_hentry = NULL;
+	type_hentry = (OptionTypeHashEntry *)hash_search(guc_types_hashtab, &type_name, HASH_FIND, &found);
+	if (found) {
+		definition_ptr = type_hentry->definition;
+		return definition_ptr;
+	}
+	return NULL;
+}
+
+int is_correct_idx(const char * field, int cnt_fields) {
+	int field_idx = -1;
+	if ( '0' <= field[0] && field[0]  <= '9') {
+		field_idx = atoi(field);
+		if (field_idx >= cnt_fields) {
+			return -1;
+		}
+		return field_idx;
+	}
+	return -1;
+}
+
+int get_type_memory_size(const char* type_name ) {
+	if (!type_name)
+		return -1;
+
+	//ARRAY CASE
+	if (is_array_type(type_name)) {
+		char *basic_type = get_type_of_array(type_name);
+		struct type_definition *basic_type_def = try_find_type(basic_type);
+		guc_free(basic_type);
+		if (!(basic_type_def))
+			return -1;
+		return get_array_size(type_name) * basic_type_def->type_size;
+	}
+
+	//STRUCT CASE
+
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type_name)))
+		return NULL;
+	return struct_type->type_size;
+}
+
+
+char *get_field_type_name(const char * type_name, const char *field) {
+	if (!type_name || !field)
+		return NULL;
+
+
+	char *result = NULL;
+	unsigned long type_name_len = strlen(type_name);
+	unsigned long field_name_len = strlen(field);
+
+	//ARRAY CASE
+	if (is_array_type(type_name)) {
+		int array_size = get_array_size(type_name);
+		//check index
+		if (is_correct_idx(field, array_size) < 0)
+			return NULL;
+
+		return get_type_of_array(type_name);
+	}
+
+	//STRUCT CASE
+
+	//find type definition
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type_name)))
+		return NULL;
+
+	//get field by index
+	if ( '0' <= field[0] && field[0] <= '9') {
+		int field_idx = -1;
+		if ((field_idx = is_correct_idx(field, struct_type->cnt_fields)) < 0)
+			return NULL;
+		else {
+			int field_type_name_len = strlen(struct_type->fields[field_idx].type);
+			char *result = (char *)guc_malloc(ERROR, (field_type_name_len + 1) * sizeof(char));
+			strcpy(result, struct_type->fields[field_idx].type);
+			result[field_type_name_len] = 0;
+			return result;
+		}
+	}
+
+	//get field by name;
+	for (int i = 0; i < struct_type->cnt_fields; i++) {
+		if (!strcmp(field,struct_type->fields[i].name)) {
+			int field_type_name_len = strlen(struct_type->fields[i].type);
+			char *result = guc_malloc(ERROR, (field_type_name_len + 1) * sizeof(char));
+			strcpy(result, struct_type->fields[i].type);
+			result[field_type_name_len] = 0;
+			return result;
+		}
+	}
+	return NULL;
+}
+
+
+int get_field_offset(const char * type_name, const char *field) {
+	if (!type_name || !field)
+		return -1;
+
+	unsigned long type_name_len = strlen(type_name);
+	unsigned long field_name_len = strlen(field);
+
+	//ARRAY CASE
+	if (is_array_type(type_name)) {
+		//Check field name
+		int field_idx = -1;
+		if ((field_idx = is_correct_idx(field, get_array_size(type_name))) < 0)
+			return -1;
+
+		char *array_type = get_type_of_array(type_name);
+		//FIND TYPE DEFINITION
+		struct type_definition *array_type_def = try_find_type(array_type);
+		guc_free(array_type);
+		if (!array_type_def)
+			return -1;
+		return array_type_def->offset * field_idx;
+	}
+
+	//STRUCT CASE
+
+	//find type definition
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type_name)))
+		return -1;
+
+	//get offset by index
+	if ( '0' <= field[0] && field[0] <= '9') {
+		int field_idx = -1;
+		if ((field_idx = is_correct_idx(field, struct_type->cnt_fields)) < 0)
+			return -1;
+		else {
+			int total_offset = 0;
+
+			for (int i = 0; i < field_idx; i++) {
+				int increment = get_type_memory_size(struct_type->fields[i].type);
+				if(increment < 0)
+					return -1;
+				total_offset += increment;
+			}
+			return total_offset;
+		}
+	}
+
+	//get offset by name
+	int i = 0;
+	int total_offset = 0;
+	while (i < struct_type->cnt_fields && strcmp(struct_type->fields[i].name, field)) {
+		int increment = get_type_memory_size(struct_type->fields[i].type);
+		if(increment < 0)
+			return -1;
+		total_offset += increment;
+		i++;
+	}
+	if(i < struct_type->cnt_fields)
+		return total_offset;
+	return -1;
 }
 
 /*
