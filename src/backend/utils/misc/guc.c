@@ -3496,6 +3496,9 @@ void init_type_definition(struct type_definition *definition) {
 	}
 
 	definition->offset = max_offset;
+	if (curr_off % max_offset != 0) {
+		curr_off += max_offset - curr_off % max_offset;
+	}
 	definition->type_size = curr_off;
 	definition->cnt_fields = count_fields;
 
