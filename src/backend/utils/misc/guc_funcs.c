@@ -1056,12 +1056,11 @@ get_count_user_types(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(res);
 }
 
-Datum
-get_field_type(PG_FUNCTION_ARGS)
+Datum get_field_type_by_path(PG_FUNCTION_ARGS)
 {
 	char *type_name = TextDatumGetCString(PG_GETARG_DATUM(0));
 	char *field = TextDatumGetCString(PG_GETARG_DATUM(1));
-	char * result_type_name = get_field_type_name(type_name, field);
+	char * result_type_name = get_nest_field_type(type_name, field);
 	PG_RETURN_TEXT_P(cstring_to_text(result_type_name));
 }
 
@@ -1069,6 +1068,6 @@ Datum get_field_offset_in_struct(PG_FUNCTION_ARGS)
 {
 	char *type_name = TextDatumGetCString(PG_GETARG_DATUM(0));
 	char *field = TextDatumGetCString(PG_GETARG_DATUM(1));
-	int offset = get_field_offset(type_name, field);
+	int offset = get_nest_field_offset(type_name, field);
 	PG_RETURN_INT32(offset);
 }

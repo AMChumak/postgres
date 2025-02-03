@@ -815,6 +815,10 @@ struct type_definition UserDefinedConfigureTypes[] = {
 		"node",
 		"string name;int max_connections_count;bool is_alive;real timeout"
 	},
+	{
+		"cluster",
+		"int cnt_nodes;node[10] nodes"
+	},
 	/* End-of-list marker */
 	{
 		NULL, NULL

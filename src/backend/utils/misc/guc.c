@@ -3284,7 +3284,6 @@ char *get_field_type_name(const char * type_name, const char *field) {
 	if (!type_name || !field)
 		return NULL;
 
-
 	char *result = NULL;
 	unsigned long type_name_len = strlen(type_name);
 	unsigned long field_name_len = strlen(field);
@@ -3510,6 +3509,76 @@ nest_safe_exit:
 	guc_free(signature);
 	return;
 }
+
+/*
+ * Tokenized path to nest structures. It replaces '->' to '\0' and
+ * returns pointer to first member name.
+*/
+#define tokenize_field_path(path) strtok(path, "->[]")
+
+char *get_nest_field_type(const char * struct_type, const char *field_path) {
+	if (!struct_type || !field_path) {
+		return NULL;
+	}
+
+	char *path = (char *)guc_malloc(ERROR, (strlen(field_path) + 1) * sizeof(char));
+	path[strlen(field_path)] = 0;
+	strcpy(path, field_path);
+
+	char *type = (char *)guc_malloc(ERROR, (strlen(struct_type) + 1) * sizeof(char));
+	type[strlen(struct_type)] = 0;
+	strcpy(type, struct_type);
+
+	char *cur_field = tokenize_field_path(path);
+
+	while (cur_field) {
+		char *next_type = get_field_type_name(type, cur_field);
+		guc_free(type);
+		type = next_type;
+		cur_field = tokenize_field_path(NULL);
+	}
+	guc_free(path);
+
+	return type;
+}
+
+int get_nest_field_offset(const char *struct_type, const char *field_path) {
+	if (!struct_type || !field_path) {
+		return -1;
+	}
+
+	char *path = (char *)guc_malloc(ERROR, (strlen(field_path) + 1) * sizeof(char));
+	path[strlen(field_path)] = 0;
+	strcpy(path, field_path);
+
+	char *type = (char *)guc_malloc(ERROR, (strlen(struct_type) + 1) * sizeof(char));
+	type[strlen(struct_type)] = 0;
+	strcpy(type, struct_type);
+
+	int total_offset = 0;
+
+	char *cur_field = tokenize_field_path(path);
+
+	while (cur_field) {
+		int local_offset = get_field_offset(type, cur_field);
+		if (local_offset < 0) {
+			total_offset = -1;
+			break;
+		}
+		total_offset += local_offset;
+		char *next_type = get_field_type_name(type, cur_field);
+		guc_free(type);
+		type = next_type;
+		cur_field = tokenize_field_path(NULL);
+
+	}
+	guc_free(path);
+	guc_free(type);
+
+	return total_offset;
+}
+
+
 
 /*
  * Parse and validate a proposed value for the specified configuration

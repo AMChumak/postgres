@@ -6658,7 +6658,7 @@
 
 {oid => '10004', descr => 'gets type of field by name or index',
   proname => 'get_field_type', prorettype => 'text',
-  proargtypes => 'text text', prosrc => 'get_field_type'}, 
+  proargtypes => 'text text', prosrc => 'get_field_type_by_path'},
 
 {oid => '10005', descr => 'gets offset of field in structure or array by name or index',
   proname => 'get_field_offset', prorettype => 'int4',

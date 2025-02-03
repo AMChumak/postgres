@@ -387,9 +387,9 @@ CREATE OR REPLACE FUNCTION get_count_user_types()
   RETURNS integer
   LANGUAGE internal AS 'get_count_user_types';
 
-CREATE OR REPLACE FUNCTION get_field_type(text,text)
+CREATE OR REPLACE FUNCTION get_field_type_by_path(text,text)
   RETURNS text
-  LANGUAGE internal AS 'get_field_type';
+  LANGUAGE internal AS 'get_field_type_by_path';
 
 CREATE OR REPLACE FUNCTION get_field_offset_in_struct()
   RETURNS integer
