@@ -27,6 +27,12 @@ enum WalSyncMethod
 	WAL_SYNC_METHOD_FSYNC_WRITETHROUGH,
 	WAL_SYNC_METHOD_OPEN_DSYNC	/* for O_DSYNC */
 };
+
+struct wal_state {
+	bool wal_recycle_f;
+	int  wal_level_f;
+};
+
 extern PGDLLIMPORT int wal_sync_method;
 
 extern PGDLLIMPORT XLogRecPtr ProcLastRecPtr;
@@ -56,6 +62,8 @@ extern PGDLLIMPORT int CommitDelay;
 extern PGDLLIMPORT int CommitSiblings;
 extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
+extern PGDLLIMPORT struct wal_state my_wal_state;
+extern PGDLLIMPORT struct wal_state boot_val_wal_state;
 
 extern PGDLLIMPORT int CheckPointSegments;
 

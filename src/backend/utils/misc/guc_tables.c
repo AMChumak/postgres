@@ -758,8 +758,8 @@ struct type_definition UserDefinedConfigureTypes[] = {
 		"bool",
 		NULL,
 		0,
-		1,
-		1,
+		4,
+		4,
 		NULL
 	},
 	{
@@ -787,12 +787,8 @@ struct type_definition UserDefinedConfigureTypes[] = {
 		NULL
 	},
 	{
-		"node",
-		"string name;int max_connections_count;bool is_alive;real timeout"
-	},
-	{
-		"cluster",
-		"int cnt_nodes;node[10] nodes"
+		"wal_state",
+		"bool wal_recycle;int wal_level"
 	},
 	/* End-of-list marker */
 	{
@@ -5305,6 +5301,15 @@ struct config_enum ConfigureNamesEnum[] =
 
 struct config_struct ConfigureNamesStruct[] =
 {
+	{{"my_wal_state", PGC_USERSET, WAL_SETTINGS,
+		gettext_noop("Displays important info"),
+		NULL},
+		"wal_state",
+		&my_wal_state,
+		&boot_val_wal_state,
+		NULL, NULL, NULL, NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL

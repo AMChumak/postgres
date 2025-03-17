@@ -1180,7 +1180,6 @@ build_guc_variables(void)
 	for (i = 0; ConfigureNamesStruct[i].gen.name; i++)
 	{
 		struct config_generic *gucvar = &ConfigureNamesStruct[i].gen;
-
 		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
 											  &gucvar->name,
 											  HASH_ENTER,
@@ -1661,7 +1660,6 @@ check_GUC_init(struct config_generic *gconf)
 		case PGC_STRUCT:
 			{
 				struct config_struct *conf = (struct config_struct *) gconf;
-
 				if (conf->variable != NULL && conf->variable != conf->boot_val) {
 					if (struct_cmp(conf->variable, conf->boot_val, conf->type))
 					{
@@ -1718,7 +1716,6 @@ InitializeGUCOptions(void)
 	 * Create GUCMemoryContext and build hash table of all GUC variables.
 	 */
 	build_guc_variables();
-
 	/*
 	 * Load all variables with their compiled-in defaults, and initialize
 	 * status fields as needed.
@@ -3970,8 +3967,11 @@ int get_nest_field_offset(const char *struct_type, const char *field_path) {
 
 char *struct_to_str(const void *structp, const char *type) {
 	if (!strcmp(type,"bool")) {
-		char * buf = (char *)calloc(ERROR, 2 * sizeof(char));
-		sprintf(buf, "%d\0", *(bool *)structp);
+		char * buf = (char *)guc_malloc(ERROR, 6 * sizeof(char));
+		if (*(bool *)structp)
+			sprintf(buf, "%s\0", "true");
+		else
+			sprintf(buf, "%s\0", "false");
 		return buf;
 	}
 	else if (!strcmp(type,"int")) {
@@ -3983,27 +3983,30 @@ char *struct_to_str(const void *structp, const char *type) {
 		sprintf(buf, "%lf\0", *(double *)structp);
 		return buf;
 	} else if (!strcmp(type,"string")) {
-		return guc_strdup(ERROR, *(char **)structp);
+		char * str = guc_strdup(ERROR, *(char **)structp);
+		char * buf = (char *)guc_malloc(ERROR, (strlen(str) + 3) * sizeof(char));
+		buf[0] = 0;
+		strcat(strcat(strcat(buf, "'"),str), "'");
+		guc_free(str);
+		return buf;
 	}
 
-	//ARRAY CASE 
+	//ARRAY CASE
 	if (is_array_type(type)) {
 		int array_size = get_array_size(type);
 		char *element_type = get_type_of_array(type);
+		int element_size = get_type_memory_size(element_type);
 		char **parts = (char **)guc_malloc(ERROR, array_size * sizeof(char *));
-		char *index = (char *)guc_malloc(ERROR, 12 * sizeof(char));
 		int total_size = 3;
 		for (int i = 0; i < array_size; i++) {
-			//fill index
-			sprintf(index, "%d\0",i);
 			//fill part
-			parts[i] = struct_to_str((char *)structp + get_field_offset(type, index), element_type);
+			parts[i] = struct_to_str((char *)structp + element_size * i, element_type);
 			total_size += strlen(parts[i]) + 2;
 		}
 		guc_free(element_type);
-		guc_free(index);
 
 		char *glue_arr = (char *)guc_malloc(ERROR, total_size * sizeof(char));
+		glue_arr[0] = 0;
 		strcat(glue_arr, "[");
 		for (int i = 0; i < array_size-1; i++) {
 			strcat(glue_arr, parts[i]);
@@ -4029,16 +4032,21 @@ char *struct_to_str(const void *structp, const char *type) {
 		total_size += strlen(parts[i]) + 2;
 	}
 	char *glue_struct = (char *)guc_malloc(ERROR, total_size * sizeof(char));
+	glue_struct[0] = 0;
 	strcat(glue_struct, "{");
 	for (int i = 0; i < struct_type->cnt_fields - 1; i++) {
+
 		strcat(glue_struct, parts[i]);
 		strcat(glue_struct, ", ");
 		guc_free(parts[i]);
 	}
 	strcat(glue_struct, parts[struct_type->cnt_fields - 1]);
 	strcat(glue_struct, "}");
+	glue_struct[total_size-1] = 0;
+	elog(WARNING, "IN STRUCT CASE 4046 alive! %s\n", glue_struct);
 	guc_free(parts[struct_type->cnt_fields - 1]);
 	guc_free(parts);
+	elog(WARNING, "IN STRUCT CASE 4046 alive! %p\n", glue_struct);
 	return glue_struct;
 }
 
@@ -6896,8 +6904,11 @@ ShowGUCOption(struct config_generic *record, bool use_units)
 
 				if (conf->show_hook)
 					val = conf->show_hook();
-				else if (conf->variable)
-					val = struct_to_str(conf->variable, conf->type);
+				else if (conf->variable){
+					char *value =  struct_to_str(conf->variable, conf->type);
+					val = pstrdup(value);
+					guc_free(value);
+				}
 				else
 					val = "nil";
 			}
