@@ -735,9 +735,10 @@ const char *const config_type_names[] =
 	[PGC_REAL] = "real",
 	[PGC_STRING] = "string",
 	[PGC_ENUM] = "enum",
+	[PGC_STRUCT] = "struct"
 };
 
-StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
+StaticAssertDecl(lengthof(config_type_names) == (PGC_STRUCT + 1),
 				 "array length mismatch");
 
 
@@ -752,24 +753,6 @@ StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
  *    "<type_1> <field_name_1>;<type_2> <field_name_2>; ..."
  *    where type_N - one of { bool, int, real, string, enum, struct <name_struct>} (name_struct - name of already defined struct type)
 */
-struct_field test_data[] = {
-			{
-				"string",
-				"name"
-			},
-			{
-				"int",
-				"max_connections_count"
-			},
-			{
-				"bool",
-				"is_alive"
-			},
-			{
-				"real",
-				"timeout"
-			}
-};
 struct type_definition UserDefinedConfigureTypes[] = {
 	{
 		"bool",
@@ -793,14 +776,6 @@ struct type_definition UserDefinedConfigureTypes[] = {
 		0,
 		8,
 		8,
-		NULL
-	},
-	{
-		"enum",
-		NULL,
-		0,
-		4,
-		4,
 		NULL
 	},
 	{
@@ -5325,5 +5300,13 @@ struct config_enum ConfigureNamesEnum[] =
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, NULL, NULL, NULL, NULL
+	}
+};
+
+struct config_struct ConfigureNamesStruct[] =
+{
+	/* End-of-list marker */
+	{
+		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 	}
 };

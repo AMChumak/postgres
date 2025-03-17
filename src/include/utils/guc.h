@@ -386,6 +386,20 @@ extern void DefineCustomEnumVariable(const char *name,
 									 GucEnumAssignHook assign_hook,
 									 GucShowHook show_hook) pg_attribute_nonnull(1, 4);
 
+extern void DefineCustomStructVariable(const char *name,
+									const char *short_desc,
+									const char *long_desc,
+									const char *type,
+									void *valueAddr,
+									const void *bootValueAddr,
+									GucContext context,
+									int flags,
+									GucStructCheckHook check_hook,
+									GucStructAssignHook assign_hook,
+									GucShowHook show_hook);
+
+extern void DefineCustomStructType(const char *type, const char *signature);
+
 extern void MarkGUCPrefixReserved(const char *className);
 
 /* old name for MarkGUCPrefixReserved, for backwards compatibility: */

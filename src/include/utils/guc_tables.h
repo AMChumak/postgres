@@ -11,7 +11,7 @@
  *
  *-------------------------------------------------------------------------
  */
-#include "guc.h"
+
 #ifndef GUC_TABLES_H
 #define GUC_TABLES_H 1
 
@@ -306,14 +306,16 @@ struct config_struct
 {
 	struct config_generic gen;
 	/*constant fields, must be set correctly in initial value: */
-	const struct type_definition *definition;
+	const char *type;
 	void *variable;
 	const void *boot_val;
 	GucStructCheckHook check_hook;
+	GucStructAssignHook assign_hook;
 	GucShowHook show_hook;
 	/* variable fields, initialized at runtime: */
 	void		*reset_val;
 	void	   *reset_extra;
+	const struct type_definition *definition;
 };
 
 /* constant tables corresponding to enums above and in guc.h */
@@ -329,6 +331,7 @@ extern PGDLLIMPORT struct config_int ConfigureNamesInt[];
 extern PGDLLIMPORT struct config_real ConfigureNamesReal[];
 extern PGDLLIMPORT struct config_string ConfigureNamesString[];
 extern PGDLLIMPORT struct config_enum ConfigureNamesEnum[];
+extern PGDLLIMPORT struct config_struct ConfigureNamesStruct[];
 
 
 /* lookup GUC variables, returning config_generic pointers */

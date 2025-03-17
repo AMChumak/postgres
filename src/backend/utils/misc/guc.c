@@ -24,7 +24,9 @@
  */
 #include "postgres.h"
 
+
 #include <stdio.h>
+#include <float.h>
 #include <string.h>
 #include <limits.h>
 #include <math.h>
@@ -281,7 +283,21 @@ static bool call_string_check_hook(struct config_string *conf, char **newval,
 								   void **extra, GucSource source, int elevel);
 static bool call_enum_check_hook(struct config_enum *conf, int *newval,
 								 void **extra, GucSource source, int elevel);
-
+static bool call_struct_check_hook(struct config_struct *conf, void *newval,
+								 void **extra, GucSource source, int elevel);
+// functions for user types
+void init_type_definition(struct type_definition *definition);
+char *get_type_of_array(const char * array_type_name);
+struct type_definition *try_find_type(const char *type_name);
+bool is_array_type(const char * type_name);
+static int get_type_memory_size(const char* type_name);
+static char *struct_to_str(const void *structp, const char *type);
+static void *struct_dup(const void *structp, const char *type);
+int struct_cmp (const void *first, const void *second, const char *type);
+void free_struct_strs(void *delptr, const char *type);
+void free_struct(void *delptr, const char *type);
+void DefineCustomStructType(const char *type, const char *signature);
+#define CNT_SIMPLE_TYPES 5
 
 
 /*
@@ -753,6 +769,46 @@ set_string_field(struct config_string *conf, char **field, char *newval)
 		guc_free(oldval);
 }
 
+
+/*
+ * Detect whether structval is referenced anywhere in a GUC struct item
+ */
+static bool
+struct_field_used(struct config_struct *conf, void *structval)
+{
+	GucStack   *stack;
+
+	if (structval == conf->variable ||
+		structval == conf->reset_val ||
+		structval == conf->boot_val)
+		return true;
+	for (stack = conf->gen.stack; stack; stack = stack->prev)
+	{
+		if (structval == stack->prior.val.structval ||
+			structval == stack->masked.val.structval)
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Support for assigning to a field of a struct GUC item.  Free the prior
+ * value if it's not referenced anywhere else in the item (including stacked
+ * states).
+ */
+static void
+set_struct_field(struct config_struct *conf, void **field, void *newval)
+{
+	void	   *oldval = *field;
+
+	/* Do the assignment */
+	*field = struct_dup(newval, conf->definition->type);
+
+	/* Free old value if it's not NULL and isn't referenced anymore */
+	if (oldval && !struct_field_used(conf, oldval))
+		free_struct(oldval, conf->definition->type);
+}
+
 /*
  * Detect whether an "extra" struct is referenced anywhere in a GUC item
  */
@@ -783,6 +839,10 @@ extra_field_used(struct config_generic *gconf, void *extra)
 			break;
 		case PGC_ENUM:
 			if (extra == ((struct config_enum *) gconf)->reset_extra)
+				return true;
+			break;
+		case PGC_STRUCT:
+			if (extra == ((struct config_struct *) gconf)->reset_extra)
 				return true;
 			break;
 	}
@@ -847,6 +907,10 @@ set_stack_value(struct config_generic *gconf, config_var_value *val)
 			val->val.enumval =
 				*((struct config_enum *) gconf)->variable;
 			break;
+		case PGC_STRUCT:
+			set_struct_field((struct config_struct *) gconf,
+							 &(val->val.structval),
+							 ((struct config_struct *)gconf)->variable);
 	}
 	set_extra_field(gconf, &(val->extra), gconf->extra);
 }
@@ -869,6 +933,11 @@ discard_stack_value(struct config_generic *gconf, config_var_value *val)
 		case PGC_STRING:
 			set_string_field((struct config_string *) gconf,
 							 &(val->val.stringval),
+							 NULL);
+			break;
+		case PGC_STRUCT:
+			set_struct_field((struct config_struct *) gconf,
+							 &(val->val.structval),
 							 NULL);
 			break;
 	}
@@ -926,7 +995,7 @@ build_guc_variables(void)
 	HASHCTL		types_hash_ctl;
 	OptionTypeHashEntry *type_hentry;
 	const char *built_in_types[] = {"bool", "int", "real", "enum", "string"};
-	int cnt_built_in_types = 5;
+
 	bool		found;
 	int			i;
 
@@ -990,6 +1059,14 @@ build_guc_variables(void)
 		num_vars++;
 	}
 
+	for (i = 0; ConfigureNamesStruct[i].gen.name; i++ )
+	{
+		struct config_struct *conf = &ConfigureNamesStruct[i];
+
+		conf->gen.vartype = PGC_STRUCT;
+		num_vars++;
+	}
+
 
 	/*
 	 * Create hash tables with 20% slack
@@ -1018,7 +1095,7 @@ build_guc_variables(void)
 		type_hentry->definition = type_definition;
 
 		int check = 1;
-		for (int j = 0; j < cnt_built_in_types; j++) {
+		for (int j = 0; j < CNT_SIMPLE_TYPES; j++) {
 			check *= strcmp(type_definition->type, built_in_types[j]);
 		}
 		if (check) { //we mark user type structures up
@@ -1091,6 +1168,18 @@ build_guc_variables(void)
 	for (i = 0; ConfigureNamesEnum[i].gen.name; i++)
 	{
 		struct config_generic *gucvar = &ConfigureNamesEnum[i].gen;
+
+		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
+											  &gucvar->name,
+											  HASH_ENTER,
+											  &found);
+		Assert(!found);
+		hentry->gucvar = gucvar;
+	}
+
+	for (i = 0; ConfigureNamesStruct[i].gen.name; i++)
+	{
+		struct config_generic *gucvar = &ConfigureNamesStruct[i].gen;
 
 		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
 											  &gucvar->name,
@@ -1498,6 +1587,7 @@ check_GUC_name_for_parameter_acl(const char *name)
  * real - can be 0.0, otherwise must be same as the boot_val
  * string - can be NULL, otherwise must be strcmp equal to the boot_val
  * enum - must be same as the boot_val
+ * struct - can be NULL, otherwise must be bitwise equal to the boot_val
  */
 #ifdef USE_ASSERT_CHECKING
 static bool
@@ -1567,6 +1657,24 @@ check_GUC_init(struct config_generic *gconf)
 					return false;
 				}
 				break;
+			}
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+
+				if (conf->variable != NULL && conf->variable != conf->boot_val) {
+					if (struct_cmp(conf->variable, conf->boot_val, conf->type))
+					{
+						char *boot_str = struct_to_str(conf->boot_val, conf->type);
+						char *var_str = struct_to_str(conf->variable, conf->type);
+						elog(LOG, "GUC (PGC_STRUCT %s) %s, boot_val=%s, C-var=%s",
+							conf->type, conf->gen.name, boot_str, var_str);
+						guc_free(boot_str);
+						guc_free(var_str);
+						return false;
+					}
+					break;
+				}
 			}
 	}
 
@@ -1813,6 +1921,51 @@ InitializeOneGUCOption(struct config_generic *gconf)
 				if (conf->assign_hook)
 					conf->assign_hook(newval, extra);
 				*conf->variable = conf->reset_val = newval;
+				conf->gen.extra = conf->reset_extra = extra;
+				break;
+			}
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+				void 		*newval;
+				void 		*extra = NULL;
+
+				if (!conf->type && !conf->definition) {
+					elog(FATAL, "failed to initialize %s. The type not specified",
+						conf->gen.name);
+					break;
+				}
+				if (!conf->type) {
+					conf->type = conf->definition->type;
+				}
+				if (!conf->definition) {
+					conf->definition = try_find_type(conf->type);
+					if (!conf->definition) {
+						elog(FATAL, "failed to initialize %s. Undefined type %s",
+							conf->gen.name, conf->type);
+						break;
+					}
+				}
+
+				if (conf->boot_val != NULL)
+					newval = struct_dup(conf->boot_val, conf->type);
+				else
+				 	newval = NULL;
+
+				/* non-NULL boot_val must always get strdup'd */
+				if (conf->boot_val != NULL)
+					newval = struct_dup(conf->boot_val, conf->type);
+				else
+					newval = NULL;
+
+				if (!call_struct_check_hook(conf, newval, &extra,
+											PGC_S_DEFAULT, LOG))
+					elog(FATAL, "failed to initialize %s to %s",
+						 conf->gen.name, newval ? struct_to_str(newval, conf->type) : "");
+				if (conf->assign_hook)
+					conf->assign_hook(newval, extra);
+				conf->reset_val = newval;
+				memcpy(conf->variable, newval, conf->definition->type_size);
 				conf->gen.extra = conf->reset_extra = extra;
 				break;
 			}
@@ -2150,6 +2303,18 @@ ResetAllOptions(void)
 						conf->assign_hook(conf->reset_val,
 										  conf->reset_extra);
 					*conf->variable = conf->reset_val;
+					set_extra_field(&conf->gen, &conf->gen.extra,
+									conf->reset_extra);
+					break;
+				}
+			case PGC_STRUCT:
+				{
+					struct config_struct *conf = (struct config_struct *) gconf;
+
+					if (conf->assign_hook)
+						conf->assign_hook(conf->reset_val,
+										  conf->reset_extra);
+					memcpy(conf->variable, conf->reset_val, conf->definition->type_size);
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									conf->reset_extra);
 					break;
@@ -2566,6 +2731,34 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 												newextra);
 								changed = true;
 							}
+							break;
+						}
+					case PGC_STRUCT:
+						{
+							struct config_struct *conf = (struct config_struct *) gconf;
+							char	   *newval = newvalue.val.structval;
+							void	   *newextra = newvalue.extra;
+
+							if (struct_cmp(conf->variable, newval, conf->type) ||
+								conf->gen.extra != newextra)
+							{
+								if (conf->assign_hook)
+									conf->assign_hook(newval, newextra);
+								set_struct_field(conf, &conf->variable, newval);
+								memcpy(conf->variable, newval, conf->definition->type_size);
+								set_extra_field(&conf->gen, &conf->gen.extra,
+												newextra);
+								changed = true;
+							}
+
+							/*
+							 * Release stacked values if not used anymore. We
+							 * could use discard_stack_value() here, but since
+							 * we have type-specific code anyway, might as
+							 * well inline it.
+							 */
+							set_struct_field(conf, &stack->prior.val.structval, NULL);
+							set_struct_field(conf, &stack->masked.val.structval, NULL);
 							break;
 						}
 				}
@@ -3176,6 +3369,212 @@ config_enum_get_options(struct config_enum *record, const char *prefix,
 	return retstr.data;
 }
 
+
+
+/*
+ * Recursive bypass of struct
+ * Where was no collapse escape-sequences and embedded quotations while lexing
+ * NOTE that parameter result has type void *. This is so, because tunction fills already allocated memory
+*/
+bool parse_struct_impl(char *value, const char *type, void *result, int flags, const char **hintmsg) {
+	//SPACES BEFORE STRUCT
+	char *c = value;
+		while (isspace(*c))
+			c++;
+
+	//ARRAY CASE
+	if (is_array_type(type)) {
+		if (*c != '['){
+			//todo hint
+			return false;
+		}
+		c++;
+		char *st_ptr = c, *end_ptr = NULL;
+		bool in_str = false;
+		int curl_br_cnt = 0; // counter of curly braces nesting
+		int sqr_br_cnt = 0; // counter of square braces nesting (without extern array layer)
+		int pos = 0; //position in array
+		int array_size = get_array_size(type);
+		const char *inner_type = get_type_of_array(type);
+		if (!inner_type){
+			//todo hints
+			return false;
+		}
+		int inner_type_size = get_type_memory_size(inner_type);
+		while (*c) {
+			if (*c == '\'' && *(c - 1) != '\\' )
+				in_str ^= true;
+			else if (*c == ',' && !in_str && !curl_br_cnt && !sqr_br_cnt) {
+				if (pos == array_size - 1) {
+					//todo set hints
+					return false;
+				}
+				*c = 0;
+				end_ptr = c;
+				bool check = parse_struct_impl(st_ptr, inner_type, (char*)result + pos * inner_type_size, flags, hintmsg);
+				st_ptr = end_ptr+1;
+				pos++;
+				if (!check)
+					return false;
+			} else if (*c == ']' && !in_str && !curl_br_cnt && !sqr_br_cnt) {
+				if (pos > array_size - 1) {
+					//todo set hints
+					return false;
+				}
+				*c = 0;
+				end_ptr = c;
+				bool check = parse_struct_impl(st_ptr, inner_type, (char*)result + pos * inner_type_size, flags, hintmsg);
+				pos++;
+				if (!check)
+					return false;
+
+				c++;
+				break;
+			} else if (*c == ']' && !in_str) {
+				sqr_br_cnt--;
+			} else if (*c == '[' && !in_str) {
+				sqr_br_cnt++;
+			} else if (*c == '}' && !in_str) {
+				curl_br_cnt--;
+			} else if (*c == '{' && !in_str) {
+				curl_br_cnt++;
+			}
+			c++;
+		}
+		return true;
+	}
+
+	//find type definition
+	struct type_definition *type_def = NULL;
+	if (!(type_def = try_find_type(type))) {
+		//todo hints
+		return false;
+	}
+
+
+	//STRUCT CASE
+	if (type_def->cnt_fields > 0) {
+		if (*c != '{'){
+			//todo hint
+			return false;
+		}
+		c++;
+		char *st_ptr = c, *end_ptr = NULL;
+		bool in_str = false;
+		int curl_br_cnt = 0; // counter of curly braces nesting (without extern array layer)
+		int sqr_br_cnt = 0; // counter of square braces nesting
+		int pos = 0; //position in structure
+		int offset = 0; //offset in structure
+		while (*c) {
+			if (*c == '\'' && *(c - 1) != '\\' )
+				in_str ^= true;
+			else if (*c == ',' && !in_str && !curl_br_cnt && !sqr_br_cnt) {
+				if (pos == type_def->cnt_fields - 1) {
+					//todo set hints
+					return false;
+				}
+				*c = 0;
+				end_ptr = c;
+				const char *field_type = type_def->fields[pos].type;
+				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + offset, flags, hintmsg);
+				st_ptr = end_ptr+1;
+				offset += get_type_memory_size(field_type);
+				pos++;
+				if (!check)
+					return false;
+
+			} else if (*c == ']' && !in_str && !curl_br_cnt && !sqr_br_cnt) {
+				if (pos > type_def->cnt_fields - 1) {
+					//todo set hints
+					return false;
+				}
+				*c = 0;
+				end_ptr = c;
+				const char *field_type = type_def->fields[pos].type;
+				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + 3, flags, hintmsg);
+				offset += get_type_memory_size(field_type);
+				pos++;
+				if (!check)
+					return false;
+				c++;
+				break;
+			} else if (*c == ']' && !in_str) {
+				sqr_br_cnt--;
+			} else if (*c == '[' && !in_str) {
+				sqr_br_cnt++;
+			} else if (*c == '}' && !in_str) {
+				curl_br_cnt--;
+			} else if (*c == '{' && !in_str) {
+				curl_br_cnt++;
+			}
+			c++;
+		}
+		return true;
+	}
+
+	//ATOMIC CASE
+	if (!strcmp(type_def->type, "bool")) {
+		char *strval = strtok(value, " ");
+		if (!parse_bool(strval, (bool *)result)) {
+			//todo hint
+			return false;
+		}
+		return true;
+	} else if (!strcmp(type_def->type, "int")) {
+		char *strval = strtok(value, " ");
+		if (!parse_int(strval, (int *)result, flags, hintmsg)) {
+			return false;
+		}
+		return true;
+	} else if (!strcmp(type_def->type, "real")) {
+		char *strval = strtok(value, " ");
+		if (!parse_real(strval, (double *)result, flags, hintmsg)) {
+			return false;
+		}
+		return true;
+	} else if (!strcmp(type_def->type, "string")) {
+		if (*c != '\'') {
+			//todo hint
+			return false;
+		}
+		c++;
+		char *st_ptr = c;
+		while (*c != '\'' || *(c-1) == '\\')
+			c++;
+		*c = 0;
+		char *newval = guc_malloc(ERROR, (c - st_ptr + 1) * sizeof(char));
+		sprintf(newval, st_ptr);
+		if (*((char **)result)) {
+			guc_free(*(char **)result);
+		}
+		*((char **)result) = newval;
+		return true;
+	}
+	//todo hint
+	return false;
+}
+
+/*
+ * Try to parse value as a struct.  The accepted formats are the
+ * {} - braces for the struct, [] - braces for the array, \, - delimeter
+ *
+ * If the string parses okay, return true, else false.
+ * If okay and result is not NULL, return the value in *result and type of struct in type
+ * If not okay and hintmsg is not NULL, *hintmsg is set to a suitable
+ * HINT message, or NULL if no hint provided.
+ * NOTE that result is void ** beacause function changes pointer to structure to pointer to allocated memory
+ */
+ bool
+ parse_struct(const char *value, const char *type, void *boot_value, void **result, int flags, const char **hintmsg)
+ {
+	char *scheme = guc_strdup(ERROR, value);
+	void *boot_val = struct_dup(boot_value, type);
+	bool check = parse_struct_impl(scheme, type, boot_val,flags,hintmsg);
+	guc_free(scheme);
+	return check;
+ }
+
+
 /*FUNCTIONS FOR WORKING WITH USER TYPES TABLE*/
 
 bool is_array_type(const char * type_name) {
@@ -3235,7 +3634,7 @@ int is_correct_idx(const char * field, int cnt_fields) {
 	return -1;
 }
 
-int get_type_memory_size(const char* type_name ) {
+static int get_type_memory_size(const char* type_name ) {
 	if (!type_name)
 		return -1;
 
@@ -3312,7 +3711,7 @@ char *get_field_type_name(const char * type_name, const char *field) {
 			return NULL;
 		else {
 			int field_type_name_len = strlen(struct_type->fields[field_idx].type);
-			char *result = (char *)guc_malloc(ERROR, (field_type_name_len + 1) * sizeof(char));
+			result = (char *)guc_malloc(ERROR, (field_type_name_len + 1) * sizeof(char));
 			strcpy(result, struct_type->fields[field_idx].type);
 			result[field_type_name_len] = 0;
 			return result;
@@ -3323,7 +3722,7 @@ char *get_field_type_name(const char * type_name, const char *field) {
 	for (int i = 0; i < struct_type->cnt_fields; i++) {
 		if (!strcmp(field,struct_type->fields[i].name)) {
 			int field_type_name_len = strlen(struct_type->fields[i].type);
-			char *result = guc_malloc(ERROR, (field_type_name_len + 1) * sizeof(char));
+			result = guc_malloc(ERROR, (field_type_name_len + 1) * sizeof(char));
 			strcpy(result, struct_type->fields[i].type);
 			result[field_type_name_len] = 0;
 			return result;
@@ -3396,14 +3795,6 @@ int get_field_offset(const char * type_name, const char *field) {
 	return -1;
 }
 
-void alloc_n_copy(char **allocated_str) {
-	if (!allocated_str)
-		return NULL;
-	unsigned long len = strlen(*allocated_str);
-	char *new_str = (char *)guc_malloc(ERROR, len + 1);
-	strncpy(new_str, *allocated_str, len+1);
-	*allocated_str = new_str;
-}
 
 void init_type_definition(struct type_definition *definition) {
 	const char *def_del = ";", *word_del = " ";
@@ -3411,7 +3802,7 @@ void init_type_definition(struct type_definition *definition) {
 	int count_fields = 0;
 
 	//count fields in signature
-	char *sym = definition->signature;
+	const char *sym = definition->signature;
 	if (!sym || !*sym) {
 		elog (ERROR, "signature of %s is empty", definition->type);
 		return;
@@ -3435,8 +3826,7 @@ void init_type_definition(struct type_definition *definition) {
 	int curr_off = 0;
 	int i;
 
-	signature = definition->signature;
-	alloc_n_copy(&signature);
+	signature = guc_strdup(ERROR, definition->signature);
 
 	for (i = 0; ; i++, signature = NULL) {
 		field_def_token = strtok_r(signature, def_del, &signature_saveptr);
@@ -3456,7 +3846,7 @@ void init_type_definition(struct type_definition *definition) {
 				break;
 			}
 
-			alloc_n_copy(&word_token);
+			word_token = guc_strdup(ERROR, word_token);
 
 
 			if (!word_token[0]) {
@@ -3576,6 +3966,258 @@ int get_nest_field_offset(const char *struct_type, const char *field_path) {
 	guc_free(type);
 
 	return total_offset;
+}
+
+static char *struct_to_str(const void *structp, const char *type) {
+	if (!strcmp(type,"bool")) {
+		char * buf = (char *)calloc(ERROR, 2 * sizeof(char));
+		sprintf(buf, "%d\0", *(bool *)structp);
+		return buf;
+	}
+	else if (!strcmp(type,"int")) {
+		char * buf = (char *)guc_malloc(ERROR, 12 * sizeof(char));
+		sprintf(buf, "%d\0", *(int *)structp);
+		return buf;
+	} else if (!strcmp(type,"real")) {
+		char * buf = (char *)guc_malloc(ERROR, (DBL_MAX_10_EXP + 3) * sizeof(char));
+		sprintf(buf, "%lf\0", *(double *)structp);
+		return buf;
+	} else if (!strcmp(type,"string")) {
+		return guc_strdup(ERROR, *(char **)structp);
+	}
+
+	//ARRAY CASE 
+	if (is_array_type(type)) {
+		int array_size = get_array_size(type);
+		char *element_type = get_type_of_array(type);
+		char **parts = (char **)guc_malloc(ERROR, array_size * sizeof(char *));
+		char *index = (char *)guc_malloc(ERROR, 12 * sizeof(char));
+		int total_size = 3;
+		for (int i = 0; i < array_size; i++) {
+			//fill index
+			sprintf(index, "%d\0",i);
+			//fill part
+			parts[i] = struct_to_str((char *)structp + get_field_offset(type, index), element_type);
+			total_size += strlen(parts[i]) + 2;
+		}
+		guc_free(element_type);
+		guc_free(index);
+
+		char *glue_arr = (char *)guc_malloc(ERROR, total_size * sizeof(char));
+		strcat(glue_arr, "[");
+		for (int i = 0; i < array_size-1; i++) {
+			strcat(glue_arr, parts[i]);
+			strcat(glue_arr, ", ");
+			guc_free(parts[i]);
+		}
+		strcat(glue_arr, parts[array_size - 1]);
+		strcat(glue_arr, "]");
+		guc_free(parts[array_size - 1]);
+		guc_free(parts);
+		return glue_arr;
+	}
+
+	//STRUCT CASE
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type)))
+		return NULL;
+
+	char **parts = (char **)guc_malloc(ERROR, struct_type->cnt_fields * sizeof(char *));
+	int total_size = 3;
+	for (int i = 0; i < struct_type->cnt_fields; i++) {
+		parts[i] = struct_to_str((char *)structp + get_field_offset(struct_type->type, struct_type->fields[i].name), struct_type->fields[i].type);
+		total_size += strlen(parts[i]) + 2;
+	}
+	char *glue_struct = (char *)guc_malloc(ERROR, total_size * sizeof(char));
+	strcat(glue_struct, "{");
+	for (int i = 0; i < struct_type->cnt_fields - 1; i++) {
+		strcat(glue_struct, parts[i]);
+		strcat(glue_struct, ", ");
+		guc_free(parts[i]);
+	}
+	strcat(glue_struct, parts[struct_type->cnt_fields - 1]);
+	strcat(glue_struct, "}");
+	guc_free(parts[struct_type->cnt_fields - 1]);
+	guc_free(parts);
+	return glue_struct;
+}
+
+static Size get_length_struct_str(const void *structp, const char *type) {
+	if (!strcmp(type,"bool")) {
+		return  5;
+	}
+	else if (!strcmp(type,"int")) {
+		if (*(int *)structp < 100)
+			return 4;
+		return 11;
+	} else if (!strcmp(type,"real")) {
+		return 1 + 1 + 1 + REALTYPE_PRECISION + 5;
+	} else if (!strcmp(type,"string")) {
+		return strlen(*(char **)structp);
+	}
+
+	//ARRAY CASE
+	if (is_array_type(type)) {
+		int array_size = get_array_size(type);
+		char *element_type = get_type_of_array(type);
+		int total_size = 3;
+		for (int i = 0; i < array_size; i++) {
+			total_size += get_length_struct_str((char *)structp + get_field_offset(type, index), element_type) + 2;
+		}
+		guc_free(element_type);
+
+		return total_size;
+	}
+
+	//STRUCT CASE
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type)))
+		return 0;
+
+	char **parts = (char **)guc_malloc(ERROR, struct_type->cnt_fields * sizeof(char *));
+	int total_size = 3;
+	for (int i = 0; i < struct_type->cnt_fields; i++) {
+		total_size += get_length_struct_str((char *)structp + get_field_offset(struct_type->type, struct_type->fields[i].name), struct_type->fields[i].type) + 2;
+	}
+	return total_size;
+}
+
+void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type) {
+	// ARRAY CASE
+	if (is_array_type(type)) {
+		const char *base_type = get_type_of_array(type);
+		int base_type_size = get_type_memory_size(base_type);
+		int arr_size = get_array_size(type);
+		for (int i = 0; i < arr_size; i++) {
+			struct_dup_impl((char *)dest_struct + base_type_size * i, (char *)src_struct + base_type_size * i, base_type);
+		}
+		return;
+	}
+
+	//STRUCT CASE
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type)))
+		return;
+
+	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
+		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
+			*(char **)dest_struct = guc_strdup(ERROR, *(char **)src_struct);
+			return;
+		}
+		memcpy(dest_struct, src_struct, struct_type->type_size);
+		return;
+	}
+	//composite type case
+
+	for (int i = 0; i < struct_type->cnt_fields; i++) {
+		int field_offset = get_field_offset(type, struct_type->fields[i].name);
+		struct_dup_impl((char *)dest_struct + field_offset, (char *)src_struct + field_offset, struct_type->fields[i].type);
+	}
+}
+
+static void *struct_dup(const void *structp, const char *type) {
+	if (!structp)
+		return NULL;
+	int struct_size = get_type_memory_size(type);
+	void *duplicate = guc_malloc(ERROR, struct_size);
+	//recursive bypass and searching string
+	struct_dup_impl(duplicate, structp, type);
+	return duplicate;
+}
+
+
+int struct_cmp(const void *first, const void *second, const char *type) {
+	// ARRAY CASE
+	if (is_array_type(type)) {
+		const char *base_type = get_type_of_array(type);
+		int base_type_size = get_type_memory_size(base_type);
+		int arr_size = get_array_size(type);
+		int res = 0;
+		for (int i = 0; i < arr_size; i++) {
+			res = struct_cmp((char *)first + base_type_size * i, (char *)second + base_type_size * i, base_type);
+			if (res)
+				break;
+		}
+		return res;
+	}
+
+	//STRUCT CASE
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type)))
+		return 2;
+
+	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
+		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
+			return strcmp(*(char **)first, *(char **)second);
+		} else if (!strcmp(type, "bool")) {
+			int res = *(bool *)first - *(bool *)second;
+			if (res == 0)
+				return 0;
+			if (res > 0)
+				return 1;
+			return -1;
+		} else if (!strcmp(type, "int")) {
+			int res = *(int *)first - *(int *)second;
+			if (res == 0)
+				return 0;
+			if (res > 0)
+				return 1;
+			return -1;
+		} else if (!strcmp(type, "real")) {
+			double res = *(double *)first - *(double *)second;
+			if (res == 0)
+				return 0;
+			if (res > 0)
+				return 1;
+			return -1;
+		}
+		return 2;
+	}
+	//composite type case
+	int res = 0;
+	for (int i =0 ; i < struct_type->cnt_fields; i++) {
+		int field_offset = get_field_offset(type, struct_type->fields[i].name);
+		res = struct_cmp((char *)first + field_offset, (char *)second + field_offset, struct_type->fields[i].type);
+		if (!res)
+			break;
+	}
+	return res;
+}
+
+void free_struct_strs(void *delptr, const char *type) {
+	// ARRAY CASE
+	if (is_array_type(type)) {
+		const char *base_type = get_type_of_array(type);
+		int base_type_size = get_type_memory_size(base_type);
+		int arr_size = get_array_size(type);
+		for (int i = 0; i < arr_size; i++) {
+			free_struct_strs((char *)delptr + base_type_size * i, base_type);
+		}
+		return;
+	}
+
+	//STRUCT CASE
+	struct type_definition *struct_type = NULL;
+	if (!(struct_type = try_find_type(type)))
+		return;
+
+	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
+		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
+			guc_free(delptr);
+		}
+		return;
+	}
+	//composite type case
+
+	for (int i = 0; i < struct_type->cnt_fields; i++) {
+		int field_offset = get_field_offset(type, struct_type->fields[i].name);
+		free_struct_strs((char *)delptr + field_offset, struct_type->fields[i].type);
+	}
+}
+
+void free_struct(void *delptr, const char *type) {
+	free_struct_strs(delptr, type);
+	guc_free(delptr);
 }
 
 
@@ -3760,6 +4402,26 @@ parse_and_validate_value(struct config_generic *record,
 
 				if (!call_enum_check_hook(conf, &newval->enumval, newextra,
 										  source, elevel))
+					return false;
+			}
+			break;
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_stuct *) record;
+				const char *hintmsg;
+				if (!parse_struct(value, conf->type, conf->boot_val, &newval->structval,
+					conf->gen.flags, &hintmsg))
+				{
+					ereport(elevel,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("invalid value for parameter \"%s\": \"%s\"",
+									conf->gen.name, value),
+							hintmsg ? errhint("%s", _(hintmsg)) : 0));
+					return false;
+				}
+
+				if (!call_struct_check_hook(conf, newval->structval, newextra,
+					source, elevel))
 					return false;
 			}
 			break;
@@ -4735,6 +5397,132 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 #undef newval
 			}
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) record;
+#define newval (newval_union.structval)
+				if (value)
+				{
+					if (!parse_and_validate_value(record, value,
+												source, elevel,
+												&newval_union, &newextra))
+						return 0;
+				}
+				else if (source == PGC_S_DEFAULT)
+				{
+					/* non-NULL boot_val must be dup'd*/
+					if (conf->boot_val != NULL)
+					{
+						newval = struct_dup( conf->boot_val, conf->type);
+						if (newval == NULL)
+							return 0;
+					}
+					else
+						newval = NULL;
+
+					if (!call_struct_check_hook(conf, newval, &newextra,
+												source, elevel))
+					{
+						guc_free(newval);
+						return 0;
+					}
+				}
+				else
+				{
+					/*
+					* struct_dup not needed, since reset_val is already under
+					* guc.c's control
+					*/
+					newval = conf->reset_val;
+					newextra = conf->reset_extra;
+					source = conf->gen.reset_source;
+					context = conf->gen.reset_scontext;
+					srole = conf->gen.reset_srole;
+				}
+
+
+				if (prohibitValueChange)
+				{
+					bool		newval_different;
+
+					/* newval shouldn't be NULL, so we're a bit sloppy here */
+					newval_different = (conf->variable == NULL ||
+										newval == NULL ||
+										struct_cmp(conf->variable, newval, conf->type) != 0);
+
+					/* Release newval, unless it's reset_val */
+					if (newval && !struct_field_used(conf, newval))
+						free_struct(newval, conf->type);
+					/* Release newextra, unless it's reset_extra */
+					if (newextra && !extra_field_used(&conf->gen, newextra))
+						guc_free(newextra);
+
+					if (newval_different)
+					{
+						record->status |= GUC_PENDING_RESTART;
+						ereport(elevel,
+								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
+								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
+										conf->gen.name)));
+						return 0;
+					}
+					record->status &= ~GUC_PENDING_RESTART;
+					return -1;
+				}
+
+				if (changeVal)
+				{
+					/* Save old value to support transaction abort */
+					if (!makeDefault)
+						push_old_value(&conf->gen, action);
+
+					if (conf->assign_hook)
+						conf->assign_hook(newval, newextra);
+					set_struct_field(conf, &conf->variable, newval);
+					set_extra_field(&conf->gen, &conf->gen.extra,
+									newextra);
+					set_guc_source(&conf->gen, source);
+					conf->gen.scontext = context;
+					conf->gen.srole = srole;
+				}
+
+				if (makeDefault)
+				{
+					GucStack   *stack;
+
+					if (conf->gen.reset_source <= source)
+					{
+						set_struct_field(conf, &conf->reset_val, newval);
+						set_extra_field(&conf->gen, &conf->reset_extra,
+										newextra);
+						conf->gen.reset_source = source;
+						conf->gen.reset_scontext = context;
+						conf->gen.reset_srole = srole;
+					}
+					for (stack = conf->gen.stack; stack; stack = stack->prev)
+					{
+						if (stack->source <= source)
+						{
+							set_struct_field(conf, &stack->prior.val.structval,
+											 newval);
+							set_extra_field(&conf->gen, &stack->prior.extra,
+											newextra);
+							stack->source = source;
+							stack->scontext = context;
+							stack->srole = srole;
+						}
+					}
+				}
+
+				/* Perhaps we didn't install newval anywhere */
+				if (newval && !struct_field_used(conf, newval))
+					free_struct(newval, conf->type);
+				/* Perhaps we didn't install newextra anywhere */
+				if (newextra && !extra_field_used(&conf->gen, newextra))
+					guc_free(newextra);
+				break;
+#undef newval
+			}
 	}
 
 	if (changeVal && (record->flags & GUC_REPORT) &&
@@ -4862,6 +5650,9 @@ GetConfigOption(const char *name, bool missing_ok, bool restrict_privileged)
 		case PGC_ENUM:
 			return config_enum_lookup_by_value((struct config_enum *) record,
 											   *((struct config_enum *) record)->variable);
+		case PGC_STRUCT:
+			return ((struct config_struct *) record)->variable ?
+			struct_to_str(((struct config_struct *) record)->variable, ((struct config_struct *) record)->type) : "nil";
 	}
 	return NULL;
 }
@@ -4910,6 +5701,10 @@ GetConfigOptionResetString(const char *name)
 		case PGC_ENUM:
 			return config_enum_lookup_by_value((struct config_enum *) record,
 											   ((struct config_enum *) record)->reset_val);
+
+		case PGC_STRUCT:
+			return ((struct config_struct *) record)->reset_val ?
+			struct_to_str(((struct config_struct *) record)->reset_val, ((struct config_struct *) record)->type) : "nil";
 	}
 	return NULL;
 }
@@ -5739,6 +6534,56 @@ DefineCustomEnumVariable(const char *name,
 	define_custom_variable(&var->gen);
 }
 
+void
+DefineCustomStructVariable(const char *name,
+						   const char *short_desc,
+						   const char *long_desc,
+						   const char *type,
+						   void *valueAddr,
+						   const void *bootValueAddr,
+						   GucContext context,
+						   int flags,
+						   GucStructCheckHook check_hook,
+						   GucStructAssignHook assign_hook,
+						   GucShowHook show_hook)
+{
+	struct config_struct *var;
+
+	var = (struct config_struct *)
+		init_custom_variable(name, short_desc, long_desc, context, flags,
+							 PGC_STRUCT, sizeof(struct config_struct));
+	var->variable = valueAddr;
+	var->type = type;
+	var->boot_val = bootValueAddr;
+	var->check_hook = check_hook;
+	var->assign_hook = assign_hook;
+	var->show_hook = show_hook;
+	define_custom_variable(&var->gen);
+}
+
+void DefineCustomStructType(const char *type, const char *signature) {
+	const char *built_in_types[] = {"bool", "int", "real", "enum", "string"};
+	struct type_definition *type_definition = (struct type_definition *) guc_malloc(ERROR, sizeof(struct type_definition));
+	memset(type_definition, 0, sizeof(struct type_definition));
+	type_definition->type = type;
+	type_definition->signature = signature;
+	bool found;
+	OptionTypeHashEntry *type_hentry = (OptionTypeHashEntry *) hash_search(guc_types_hashtab,
+											&type_definition->type,
+											HASH_ENTER,
+											&found);
+	Assert(!found);
+	type_hentry->definition = type_definition;
+
+	int check = 1;
+	for (int j = 0; j < CNT_SIMPLE_TYPES; j++) {
+		check *= strcmp(type_definition->type, built_in_types[j]);
+	}
+	if (check) {
+		init_type_definition(type_definition);
+	}
+}
+
 /*
  * Mark the given GUC prefix as "reserved".
  *
@@ -5877,6 +6722,21 @@ get_explain_guc_options(int *num)
 					struct config_enum *lconf = (struct config_enum *) conf;
 
 					modified = (lconf->boot_val != *(lconf->variable));
+				}
+				break;
+			case PGC_STRUCT:
+				{
+					struct config_struct *lconf = (struct config_struct *) conf;
+
+					if (lconf->boot_val == NULL &&
+						lconf->variable == NULL)
+						modified = false;
+					else if (lconf->boot_val == NULL ||
+							 lconf->variable == NULL)
+					   modified = true;
+					else {
+						modified = (struct_cmp(lconf->boot_val, lconf->variable, lconf->type) != 0);
+					}
 				}
 				break;
 
@@ -6030,6 +6890,18 @@ ShowGUCOption(struct config_generic *record, bool use_units)
 			}
 			break;
 
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) record;
+
+				if (conf->show_hook)
+					val = conf->show_hook();
+				else if (conf->variable)
+					val = struct_to_str(conf->variable, conf->type);
+				else
+					val = "nil";
+			}
+			break;
 		default:
 			/* just to keep compiler quiet */
 			val = "???";
@@ -6106,6 +6978,15 @@ write_one_nondefault_variable(FILE *fp, struct config_generic *gconf)
 
 				fprintf(fp, "%s",
 						config_enum_lookup_by_value(conf, *conf->variable));
+			}
+			break;
+
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+
+				if (conf->variable)
+					fprintf(fp, "%s", struct_to_str(conf->variable, conf->type));
 			}
 			break;
 	}
@@ -6390,6 +7271,16 @@ estimate_variable_size(struct config_generic *gconf)
 				valsize = strlen(config_enum_lookup_by_value(conf, *conf->variable));
 			}
 			break;
+
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+
+				if (conf->variable)
+					valsize = get_length_struct_str(conf->variable, conf->type);
+				else
+					valsize = 0;
+			}
 	}
 
 	/* Allow space for terminating zero-byte for value */
@@ -6548,6 +7439,14 @@ serialize_variable(char **destptr, Size *maxbytes,
 							 config_enum_lookup_by_value(conf, *conf->variable));
 			}
 			break;
+		case PGC_STRUCT:
+			{
+				struct config_struct *conf = (struct config_struct *) gconf;
+
+				char *struct_str = struct_to_str(conf->variable, conf->type);
+				do_serialize(destptr, maxbytes, "%s", struct_str);
+				guc_free(struct_str);
+			}
 	}
 
 	do_serialize(destptr, maxbytes, "%s",
@@ -6761,6 +7660,17 @@ RestoreGUCState(void *gucstate)
 				{
 					struct config_enum *conf = (struct config_enum *) gconf;
 
+					if (conf->reset_extra && conf->reset_extra != gconf->extra)
+						guc_free(conf->reset_extra);
+					break;
+				}
+			case PGC_STRUCT:
+				{
+					struct config_struct *conf = (struct config_struct *)gconf;
+
+					free_struct(conf->variable, conf->type);
+					if (conf->reset_val && conf->reset_val != conf->variable)
+						free_struct(conf->reset_val, conf->type);
 					if (conf->reset_extra && conf->reset_extra != gconf->extra)
 						guc_free(conf->reset_extra);
 					break;
@@ -7451,4 +8361,54 @@ call_enum_check_hook(struct config_enum *conf, int *newval, void **extra,
 	}
 
 	return true;
+}
+
+static bool
+call_struct_check_hook(struct config_struct *conf, void *newval, void **extra,
+						GucSource source, int elevel)
+{
+	volatile bool result = true;
+
+	/* Quick success if no hook */
+	if (!conf->check_hook)
+		return true;
+
+	/*
+	 * If elevel is ERROR, or if the check_hook itself throws an elog
+	 * (undesirable, but not always avoidable), make sure we don't leak the
+	 * already-malloc'd newval struct.
+	 */
+	PG_TRY();
+	{
+		/* Reset variables that might be set by hook */
+		GUC_check_errcode_value = ERRCODE_INVALID_PARAMETER_VALUE;
+		GUC_check_errmsg_string = NULL;
+		GUC_check_errdetail_string = NULL;
+		GUC_check_errhint_string = NULL;
+
+		if (!conf->check_hook(newval, extra, source))
+		{
+			ereport(elevel,
+					(errcode(GUC_check_errcode_value),
+					 GUC_check_errmsg_string ?
+					 errmsg_internal("%s", GUC_check_errmsg_string) :
+					 errmsg("invalid value for parameter \"%s\": %s",
+							conf->gen.name, newval ? struct_to_str(newval, conf->type) : ""),
+					 GUC_check_errdetail_string ?
+					 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
+					 GUC_check_errhint_string ?
+					 errhint("%s", GUC_check_errhint_string) : 0));
+			/* Flush any strings created in ErrorContext */
+			FlushErrorState();
+			result = false;
+		}
+	}
+	PG_CATCH();
+	{
+		guc_free(newval);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	return result;
 }
