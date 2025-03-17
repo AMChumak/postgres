@@ -83,9 +83,12 @@ LETTER			[A-Za-z_\200-\377]
 LETTER_OR_DIGIT [A-Za-z_0-9\200-\377]
 
 ID				{LETTER}{LETTER_OR_DIGIT}*
-QUALIFIED_ID	{ID}"."{ID}
+DEREF           "->"
+INDEX           "["{DIGIT}+"]"
+AID             {ID}({DEREF}{ID}|{INDEX})*
+QUALIFIED_ID	{ID}"."{AID}
 
-UNQUOTED_STRING {LETTER}({LETTER_OR_DIGIT}|[-._:/])*
+UNQUOTED_STRING ({LETTER}|\{|\[)({LETTER_OR_DIGIT}|[-._:/\',\[\]\{\}])*
 STRING			\'([^'\\\n]|\\.|\'\')*\'
 
 %%
@@ -94,7 +97,7 @@ STRING			\'([^'\\\n]|\\.|\'\')*\'
 [ \t\r]+		/* eat whitespace */
 #.*				/* eat comment (.* matches anything until newline) */
 
-{ID}			return GUC_ID;
+{AID}			return GUC_ID;
 {QUALIFIED_ID}	return GUC_QUALIFIED_ID;
 {STRING}		return GUC_STRING;
 {UNQUOTED_STRING} return GUC_UNQUOTED_STRING;
