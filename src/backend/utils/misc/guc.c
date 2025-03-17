@@ -291,7 +291,7 @@ char *get_type_of_array(const char * array_type_name);
 struct type_definition *try_find_type(const char *type_name);
 bool is_array_type(const char * type_name);
 static int get_type_memory_size(const char* type_name);
-static char *struct_to_str(const void *structp, const char *type);
+char *struct_to_str(const void *structp, const char *type);
 static void *struct_dup(const void *structp, const char *type);
 int struct_cmp (const void *first, const void *second, const char *type);
 void free_struct_strs(void *delptr, const char *type);
@@ -3968,7 +3968,7 @@ int get_nest_field_offset(const char *struct_type, const char *field_path) {
 	return total_offset;
 }
 
-static char *struct_to_str(const void *structp, const char *type) {
+char *struct_to_str(const void *structp, const char *type) {
 	if (!strcmp(type,"bool")) {
 		char * buf = (char *)calloc(ERROR, 2 * sizeof(char));
 		sprintf(buf, "%d\0", *(bool *)structp);

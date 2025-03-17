@@ -618,8 +618,6 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 	/* context */
 	values[6] = GucContext_Names[conf->context];
 
-	/* vartype */
-	values[7] = config_type_names[conf->vartype];
 
 	/* source */
 	values[8] = GucSource_Names[conf->source];
@@ -630,6 +628,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 		case PGC_BOOL:
 			{
 				struct config_bool *lconf = (struct config_bool *) conf;
+
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
 
 				/* min_val */
 				values[9] = NULL;
@@ -651,6 +652,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 		case PGC_INT:
 			{
 				struct config_int *lconf = (struct config_int *) conf;
+
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
 
 				/* min_val */
 				snprintf(buffer, sizeof(buffer), "%d", lconf->min);
@@ -677,6 +681,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 			{
 				struct config_real *lconf = (struct config_real *) conf;
 
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
+
 				/* min_val */
 				snprintf(buffer, sizeof(buffer), "%g", lconf->min);
 				values[9] = pstrdup(buffer);
@@ -701,6 +708,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 		case PGC_STRING:
 			{
 				struct config_string *lconf = (struct config_string *) conf;
+
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
 
 				/* min_val */
 				values[9] = NULL;
@@ -729,6 +739,9 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 			{
 				struct config_enum *lconf = (struct config_enum *) conf;
 
+				/* vartype */
+				values[7] = pstrdup(config_type_names[conf->vartype]);
+
 				/* min_val */
 				values[9] = NULL;
 
@@ -751,6 +764,39 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 				/* reset_val */
 				values[13] = pstrdup(config_enum_lookup_by_value(lconf,
 																 lconf->reset_val));
+			}
+			break;
+
+		case PGC_STRUCT:
+			{
+				struct config_struct *lconf = (struct config_struct *) conf;
+
+				/* vartype */
+				char *type_lbl = guc_malloc(ERROR, (strlen(lconf->type) + 7));
+				type_lbl = 0;
+				strcat(strcat(strcat(type_lbl,config_type_names[conf->vartype]), " "), lconf->type);
+				values[7] = type_lbl;
+
+				/* min_val */
+				values[9] = NULL;
+
+				/* max_val */
+				values[10] = NULL;
+
+				/* enumvals */
+				values[11] = NULL;
+
+				/* boot_val */
+				if (lconf->boot_val == NULL)
+					values[12] = NULL;
+				else
+					values[12] = struct_to_str(lconf->boot_val, lconf->type);
+
+				/* reset_val */
+				if (lconf->reset_val == NULL)
+					values[13] = NULL;
+				else
+					values[13] = struct_to_str(lconf->reset_val, lconf->type);
 			}
 			break;
 
