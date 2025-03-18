@@ -1728,7 +1728,6 @@ InitializeGUCOptions(void)
 
 		InitializeOneGUCOption(hentry->gucvar);
 	}
-
 	reporting_enabled = false;
 
 	/*
@@ -3983,6 +3982,8 @@ char *struct_to_str(const void *structp, const char *type) {
 		sprintf(buf, "%lf\0", *(double *)structp);
 		return buf;
 	} else if (!strcmp(type,"string")) {
+		if (!*(char **)structp)
+			return guc_strdup(ERROR, "nil");
 		char * str = guc_strdup(ERROR, *(char **)structp);
 		char * buf = (char *)guc_malloc(ERROR, (strlen(str) + 3) * sizeof(char));
 		buf[0] = 0;
@@ -4043,10 +4044,8 @@ char *struct_to_str(const void *structp, const char *type) {
 	strcat(glue_struct, parts[struct_type->cnt_fields - 1]);
 	strcat(glue_struct, "}");
 	glue_struct[total_size-1] = 0;
-	elog(WARNING, "IN STRUCT CASE 4046 alive! %s\n", glue_struct);
 	guc_free(parts[struct_type->cnt_fields - 1]);
 	guc_free(parts);
-	elog(WARNING, "IN STRUCT CASE 4046 alive! %p\n", glue_struct);
 	return glue_struct;
 }
 
@@ -4109,7 +4108,10 @@ void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type
 
 	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
 		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
-			*(char **)dest_struct = guc_strdup(ERROR, *(char **)src_struct);
+			if (*(char **)src_struct)
+				*(char **)dest_struct = guc_strdup(ERROR, *(char **)src_struct);
+			else
+				*(char **)dest_struct = NULL;
 			return;
 		}
 		memcpy(dest_struct, src_struct, struct_type->type_size);
@@ -4156,6 +4158,10 @@ int struct_cmp(const void *first, const void *second, const char *type) {
 
 	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
 		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
+			if (!*(char **)first && !*(char **)second)
+				return 1;
+			if (!*(char **)first || !*(char **)second)
+				return 0;
 			return strcmp(*(char **)first, *(char **)second);
 		} else if (!strcmp(type, "bool")) {
 			int res = *(bool *)first - *(bool *)second;

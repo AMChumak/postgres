@@ -31,6 +31,8 @@ enum WalSyncMethod
 struct wal_state {
 	bool wal_recycle_f;
 	int  wal_level_f;
+	double wal_latency;
+	char *wal_type;
 };
 
 extern PGDLLIMPORT int wal_sync_method;

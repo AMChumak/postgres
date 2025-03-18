@@ -788,7 +788,7 @@ struct type_definition UserDefinedConfigureTypes[] = {
 	},
 	{
 		"wal_state",
-		"bool wal_recycle;int wal_level"
+		"bool wal_recycle;int wal_level;real wal_latency;string wal_type"
 	},
 	/* End-of-list marker */
 	{
