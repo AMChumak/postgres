@@ -88,7 +88,7 @@ INDEX           "["{DIGIT}+"]"
 AID             {ID}({DEREF}{ID}|{INDEX})*
 QUALIFIED_ID	{ID}"."{AID}
 
-UNQUOTED_STRING ({LETTER}|\{|\[)({LETTER_OR_DIGIT}|[-._:/\',\[\]\{\}])*
+UNQUOTED_STRING ({LETTER}|\{|\[)({LETTER_OR_DIGIT}|[-._:/\'\,\[\]\{\}])*
 STRING			\'([^'\\\n]|\\.|\'\')*\'
 
 %%

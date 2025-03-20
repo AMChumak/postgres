@@ -292,11 +292,13 @@ struct type_definition *try_find_type(const char *type_name);
 bool is_array_type(const char * type_name);
 static int get_type_memory_size(const char* type_name);
 char *struct_to_str(const void *structp, const char *type);
+void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type);
 static void *struct_dup(const void *structp, const char *type);
 int struct_cmp (const void *first, const void *second, const char *type);
 void free_struct_strs(void *delptr, const char *type);
 void free_struct(void *delptr, const char *type);
 void DefineCustomStructType(const char *type, const char *signature);
+char *get_nest_field_type(const char * struct_type, const char *field_path);
 #define CNT_SIMPLE_TYPES 5
 
 
@@ -430,7 +432,7 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 		if (record)
 		{
 			/* If it's already marked, then this is a duplicate entry */
-			if (record->status & GUC_IS_IN_FILE)
+			if ((record->status & GUC_IS_IN_FILE) && !strchr(item->name, '-') && !strchr(item->name, '[') ) // struct's fields can be individual
 			{
 				/*
 				 * Mark the earlier occurrence(s) as dead/ignorable.  We could
@@ -580,7 +582,7 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 			/* must dup, else might have dangling pointer below */
 			pre_value = pstrdup(preval);
 		}
-
+		elog(WARNING, "i am alive in 585 guc.c %s %s\n", item->name, item->value);
 		scres = set_config_option(item->name, item->value,
 								  context, PGC_S_FILE,
 								  GUC_ACTION_SET, applySettings, 0, false);
@@ -797,16 +799,30 @@ struct_field_used(struct config_struct *conf, void *structval)
  * states).
  */
 static void
-set_struct_field(struct config_struct *conf, void **field, void *newval)
+set_struct_field(struct config_struct *conf, void **field, void *newval, bool is_variable)
 {
 	void	   *oldval = *field;
-
+	elog(WARNING, "i am alive in 805 %p\n", newval);
 	/* Do the assignment */
-	*field = struct_dup(newval, conf->definition->type);
+	if (is_variable){
+		elog(WARNING, "i am alive in 808\n");
+		free_struct_strs(*field, conf->type);
+		elog(WARNING, "i am alive in 810\n");
+		struct_dup_impl(*field, newval, conf->type);
+		elog(WARNING, "i am alive in 812\n");
+	}
+	else{
+		elog(WARNING, "i am alive in 815\n");
+		*field = struct_dup(newval, conf->type);
+		elog(WARNING, "i am alive in 817\n");
+	}
 
 	/* Free old value if it's not NULL and isn't referenced anymore */
-	if (oldval && !struct_field_used(conf, oldval))
-		free_struct(oldval, conf->definition->type);
+	if (!is_variable && oldval && !struct_field_used(conf, oldval)){
+		elog(WARNING, "i am alive in 822\n");
+		free_struct(oldval, conf->type);
+	}
+	elog(WARNING, "i am alive in 825\n");
 }
 
 /*
@@ -910,7 +926,7 @@ set_stack_value(struct config_generic *gconf, config_var_value *val)
 		case PGC_STRUCT:
 			set_struct_field((struct config_struct *) gconf,
 							 &(val->val.structval),
-							 ((struct config_struct *)gconf)->variable);
+							 ((struct config_struct *)gconf)->variable, false);
 	}
 	set_extra_field(gconf, &(val->extra), gconf->extra);
 }
@@ -938,7 +954,7 @@ discard_stack_value(struct config_generic *gconf, config_var_value *val)
 		case PGC_STRUCT:
 			set_struct_field((struct config_struct *) gconf,
 							 &(val->val.structval),
-							 NULL);
+							 NULL, false);
 			break;
 	}
 	set_extra_field(gconf, &(val->extra), NULL);
@@ -1233,13 +1249,13 @@ valid_custom_variable_name(const char *name)
 {
 	bool		saw_sep = false;
 	bool		name_start = true;
-
+	bool        is_field = false;
 	for (const char *p = name; *p; p++)
 	{
 		if (*p == GUC_QUALIFIER_SEPARATOR)
 		{
-			if (name_start)
-				return false;	/* empty name component */
+			if (name_start || is_field)
+				return false;	/* empty name component or field of struct*/
 			saw_sep = true;
 			name_start = true;
 		}
@@ -1252,6 +1268,23 @@ valid_custom_variable_name(const char *name)
 		}
 		else if (!name_start && strchr("0123456789$", *p) != NULL)
 			 /* okay as non-first character */ ;
+		else if (*p == '-') {
+			if (!name_start && *(p+1) == '>'){
+				name_start = true;
+				is_field = true;
+				p++;
+			}
+			return false;
+		} else if (!name_start && *p == '['){
+			p++;
+			while (strchr("0123456789", *p) != NULL) {
+				p++;
+			}
+			if (*p == ']' && !*(p+1) || *(p+1) == '-'){
+				is_field = true;
+			}
+			return false;
+		}
 		else
 			return false;
 	}
@@ -1403,6 +1436,36 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 										  NULL);
 	if (hentry)
 		return hentry->gucvar;
+
+	/*struct case*/
+	char *deref_ptr = NULL;
+	char *start_path = NULL;
+	if ((deref_ptr = strchr(name, '[')) || (deref_ptr = strchr(name, '-'))) {
+
+		char *struct_name = guc_malloc(ERROR, (deref_ptr - name + 1) * sizeof(char));
+		strncpy(struct_name, name, (deref_ptr - name));
+		struct_name[deref_ptr - name] = 0;
+
+		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
+			&struct_name,
+			HASH_FIND,
+			NULL);
+
+		guc_free(struct_name);
+
+		if (hentry) {
+
+			if (*deref_ptr == '[')
+				start_path = deref_ptr;
+			else {
+				start_path = strchr(name, '>') + 1;
+			}
+			if (get_nest_field_type(((struct config_struct *)(hentry->gucvar))->type , start_path))
+				return hentry->gucvar;
+			else if (skip_errors)
+				return NULL;
+		}
+	}
 
 	/*
 	 * See if the name is an obsolete name for a variable.  We assume that the
@@ -2740,7 +2803,7 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 							{
 								if (conf->assign_hook)
 									conf->assign_hook(newval, newextra);
-								set_struct_field(conf, &conf->variable, newval);
+								set_struct_field(conf, &conf->variable, newval, true);
 								memcpy(conf->variable, newval, conf->definition->type_size);
 								set_extra_field(&conf->gen, &conf->gen.extra,
 												newextra);
@@ -2753,8 +2816,8 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 							 * we have type-specific code anyway, might as
 							 * well inline it.
 							 */
-							set_struct_field(conf, &stack->prior.val.structval, NULL);
-							set_struct_field(conf, &stack->masked.val.structval, NULL);
+							set_struct_field(conf, &stack->prior.val.structval, NULL, false);
+							set_struct_field(conf, &stack->masked.val.structval, NULL, false);
 							break;
 						}
 				}
@@ -3370,7 +3433,7 @@ config_enum_get_options(struct config_enum *record, const char *prefix,
 /*
  * Recursive bypass of struct
  * Where was no collapse escape-sequences and embedded quotations while lexing
- * NOTE that parameter result has type void *. This is so, because tunction fills already allocated memory
+ * NOTE that parameter result has type void *. This is so, because function fills already allocated memory
 */
 bool parse_struct_impl(char *value, const char *type, void *result, int flags, const char **hintmsg) {
 	//SPACES BEFORE STRUCT
@@ -3479,7 +3542,7 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 				if (!check)
 					return false;
 
-			} else if (*c == ']' && !in_str && !curl_br_cnt && !sqr_br_cnt) {
+			} else if (*c == '}' && !in_str && !curl_br_cnt && !sqr_br_cnt) {
 				if (pos > type_def->cnt_fields - 1) {
 					//todo set hints
 					return false;
@@ -3487,7 +3550,7 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 				*c = 0;
 				end_ptr = c;
 				const char *field_type = type_def->fields[pos].type;
-				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + 3, flags, hintmsg);
+				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + offset, flags, hintmsg);
 				offset += get_type_memory_size(field_type);
 				pos++;
 				if (!check)
@@ -3530,7 +3593,13 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 		return true;
 	} else if (!strcmp(type_def->type, "string")) {
 		if (*c != '\'') {
-			//todo hint
+			c = strtok(c, " ");
+			elog(WARNING, "i am inside 3597 guc.c\n");
+			if (!strcmp(c, "nil") && !strtok(NULL, " ")) {
+				elog(WARNING, "i am inside 3599 guc.c\n");
+				*((char **)result) = NULL;
+				return true;
+			}
 			return false;
 		}
 		c++;
@@ -3539,10 +3608,7 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 			c++;
 		*c = 0;
 		char *newval = guc_malloc(ERROR, (c - st_ptr + 1) * sizeof(char));
-		sprintf(newval, st_ptr);
-		if (*((char **)result)) {
-			guc_free(*(char **)result);
-		}
+		sprintf(newval, "%s", st_ptr);
 		*((char **)result) = newval;
 		return true;
 	}
@@ -3561,11 +3627,17 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
  * NOTE that result is void ** beacause function changes pointer to structure to pointer to allocated memory
  */
  bool
- parse_struct(const char *value, const char *type, void *boot_value, void **result, int flags, const char **hintmsg)
+ parse_struct(const char *value, const char *type, void **result, int flags, const char **hintmsg)
  {
 	char *scheme = guc_strdup(ERROR, value);
-	void *boot_val = struct_dup(boot_value, type);
-	bool check = parse_struct_impl(scheme, type, boot_val,flags,hintmsg);
+	void *val = guc_malloc(ERROR, get_type_memory_size(type) * sizeof(char));
+	bool check = parse_struct_impl(scheme, type, val,flags,hintmsg);
+	if (check)
+		*result = val;
+	else {
+		free(val);
+		*result = NULL;
+	}
 	guc_free(scheme);
 	return check;
  }
@@ -4090,6 +4162,7 @@ static Size get_length_struct_str(const void *structp, const char *type) {
 }
 
 void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type) {
+	elog(WARNING, "duplicate structure 4162 guc.c\n");
 	// ARRAY CASE
 	if (is_array_type(type)) {
 		const char *base_type = get_type_of_array(type);
@@ -4107,7 +4180,9 @@ void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type
 		return;
 
 	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
+		elog(WARNING, "duplicate structure 4180 gu.c\n");
 		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
+			elog(WARNING, "duplicate structure 4182 guc.c %p %p\n", *(char **)src_struct, src_struct);
 			if (*(char **)src_struct)
 				*(char **)dest_struct = guc_strdup(ERROR, *(char **)src_struct);
 			else
@@ -4115,11 +4190,13 @@ void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type
 			return;
 		}
 		memcpy(dest_struct, src_struct, struct_type->type_size);
+		elog(WARNING, "duplicate structure 4190 gu.c\n");
 		return;
 	}
 	//composite type case
 
 	for (int i = 0; i < struct_type->cnt_fields; i++) {
+		elog(WARNING, "duplicate structure 4196 guc.c\n");
 		int field_offset = get_field_offset(type, struct_type->fields[i].name);
 		struct_dup_impl((char *)dest_struct + field_offset, (char *)src_struct + field_offset, struct_type->fields[i].type);
 	}
@@ -4217,7 +4294,7 @@ void free_struct_strs(void *delptr, const char *type) {
 
 	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
 		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
-			guc_free(delptr);
+			guc_free(*(char **)delptr);
 		}
 		return;
 	}
@@ -4423,7 +4500,7 @@ parse_and_validate_value(struct config_generic *record,
 			{
 				struct config_struct *conf = (struct config_stuct *) record;
 				const char *hintmsg;
-				if (!parse_struct(value, conf->type, conf->boot_val, &newval->structval,
+				if (!parse_struct(value, conf->type, &newval->structval,
 					conf->gen.flags, &hintmsg))
 				{
 					ereport(elevel,
@@ -4433,6 +4510,7 @@ parse_and_validate_value(struct config_generic *record,
 							hintmsg ? errhint("%s", _(hintmsg)) : 0));
 					return false;
 				}
+				elog(WARNING, "which pointer %p\n", *(char **)((char*)newval->structval + 16));
 
 				if (!call_struct_check_hook(conf, newval->structval, newextra,
 					source, elevel))
@@ -5414,13 +5492,71 @@ set_config_with_handle(const char *name, config_handle *handle,
 		case PGC_STRUCT:
 			{
 				struct config_struct *conf = (struct config_struct *) record;
+
+				elog(WARNING, "i am alive in 5472\n");
+				bool is_field = false;
+				/*check that field or whole structure by name*/
+				int offset = 0;
+				char *start_path = NULL;
+				if (name && ((start_path = strchr(name, '-')) || (start_path = strchr(name,'[')))){
+					offset = get_nest_field_offset(conf->type, start_path);
+					is_field = true;
+				}
+				elog(WARNING, "i am alive in 5481\n");
 #define newval (newval_union.structval)
 				if (value)
 				{
-					if (!parse_and_validate_value(record, value,
+					char *str_val = value;
+					void *tmp_record = NULL; //there is snapshot of modified structure will be saved
+					if (is_field){
+						tmp_record = struct_dup(conf->variable, conf->type);
+						elog(WARNING, "i am alive in 5489 %p\n", tmp_record);
+						char *type = get_nest_field_type(conf->type, start_path);
+						elog(WARNING, "i am alive in 5491 %s %s\n", type, start_path);
+						free_struct_strs((char *)conf->variable + offset, type);
+						elog(WARNING, "i am alive in 5493\n");
+						const char **hintmsgs = NULL;
+						char * embedded_str = value;
+						if (!strcmp(type, "string")) {
+							embedded_str = guc_malloc(ERROR, strlen(value) + 3);
+							embedded_str[0] = '\'';
+							strcpy(embedded_str + 1, value);
+							embedded_str[strlen(value)+1] = '\'';
+							embedded_str[strlen(value)+2] = 0;
+						}
+						bool check = parse_struct_impl(embedded_str, type, (char *)tmp_record + offset, 0, hintmsgs);
+						if (!strcmp(type, "string")) {
+							guc_free(embedded_str);
+						}
+						elog(WARNING, "i am alive in 5496 %d\n",check);
+						if (!check) {
+							guc_free(type);
+							free_struct(tmp_record, conf->type);
+							return 0;
+						}
+						guc_free(type);
+
+						str_val = struct_to_str(tmp_record, conf->type);
+						elog(WARNING, "i am alive in 5505 %s\n", str_val);
+					}
+					elog(WARNING, "i am alive in 5527 %s\n", *(char **)((char *)tmp_record+16));
+
+					if (!parse_and_validate_value(record, str_val,
 												source, elevel,
 												&newval_union, &newextra))
-						return 0;
+												{
+													if (tmp_record) {
+														free_struct(tmp_record, conf->type);
+														guc_free(str_val);
+													}
+													return 0;
+												}
+					elog(WARNING, "i am alive in 5514\n");
+					if (tmp_record) {
+						free_struct(tmp_record, conf->type);
+						guc_free(str_val);
+					}
+					elog(WARNING, "i am alive in 5518\n");
 				}
 				else if (source == PGC_S_DEFAULT)
 				{
@@ -5492,9 +5628,13 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 					if (conf->assign_hook)
 						conf->assign_hook(newval, newextra);
-					set_struct_field(conf, &conf->variable, newval);
+					elog(WARNING, "i am alive in 5591 %p %p\n", newval, *(char **)((char *)newval+16));
+					//elog(WARNING, "str: %s\n", struct_to_str(newval, conf->type));
+					set_struct_field(conf, &conf->variable, newval, true);
+					elog(WARNING, "i am alive in 5593\n");
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									newextra);
+					elog(WARNING, "i am alive in 5595\n");
 					set_guc_source(&conf->gen, source);
 					conf->gen.scontext = context;
 					conf->gen.srole = srole;
@@ -5506,7 +5646,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 					if (conf->gen.reset_source <= source)
 					{
-						set_struct_field(conf, &conf->reset_val, newval);
+						set_struct_field(conf, &conf->reset_val, newval, false);
 						set_extra_field(&conf->gen, &conf->reset_extra,
 										newextra);
 						conf->gen.reset_source = source;
@@ -5518,7 +5658,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 						if (stack->source <= source)
 						{
 							set_struct_field(conf, &stack->prior.val.structval,
-											 newval);
+											 newval, false);
 							set_extra_field(&conf->gen, &stack->prior.extra,
 											newextra);
 							stack->source = source;
