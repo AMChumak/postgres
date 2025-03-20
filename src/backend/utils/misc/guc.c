@@ -5502,7 +5502,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 					offset = get_nest_field_offset(conf->type, start_path);
 					is_field = true;
 				}
-				elog(WARNING, "i am alive in 5481\n");
+				elog(WARNING, "i am alive in 5481 %d\n", is_field);
 #define newval (newval_union.structval)
 				if (value)
 				{
@@ -5510,11 +5510,8 @@ set_config_with_handle(const char *name, config_handle *handle,
 					void *tmp_record = NULL; //there is snapshot of modified structure will be saved
 					if (is_field){
 						tmp_record = struct_dup(conf->variable, conf->type);
-						elog(WARNING, "i am alive in 5489 %p\n", tmp_record);
 						char *type = get_nest_field_type(conf->type, start_path);
-						elog(WARNING, "i am alive in 5491 %s %s\n", type, start_path);
 						free_struct_strs((char *)conf->variable + offset, type);
-						elog(WARNING, "i am alive in 5493\n");
 						const char **hintmsgs = NULL;
 						char * embedded_str = value;
 						if (!strcmp(type, "string")) {
@@ -5528,7 +5525,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 						if (!strcmp(type, "string")) {
 							guc_free(embedded_str);
 						}
-						elog(WARNING, "i am alive in 5496 %d\n",check);
 						if (!check) {
 							guc_free(type);
 							free_struct(tmp_record, conf->type);
@@ -5537,9 +5533,9 @@ set_config_with_handle(const char *name, config_handle *handle,
 						guc_free(type);
 
 						str_val = struct_to_str(tmp_record, conf->type);
-						elog(WARNING, "i am alive in 5505 %s\n", str_val);
+
 					}
-					elog(WARNING, "i am alive in 5527 %s\n", *(char **)((char *)tmp_record+16));
+
 
 					if (!parse_and_validate_value(record, str_val,
 												source, elevel,
@@ -5628,13 +5624,9 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 					if (conf->assign_hook)
 						conf->assign_hook(newval, newextra);
-					elog(WARNING, "i am alive in 5591 %p %p\n", newval, *(char **)((char *)newval+16));
-					//elog(WARNING, "str: %s\n", struct_to_str(newval, conf->type));
 					set_struct_field(conf, &conf->variable, newval, true);
-					elog(WARNING, "i am alive in 5593\n");
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									newextra);
-					elog(WARNING, "i am alive in 5595\n");
 					set_guc_source(&conf->gen, source);
 					conf->gen.scontext = context;
 					conf->gen.srole = srole;
