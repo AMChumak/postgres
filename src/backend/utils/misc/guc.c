@@ -566,7 +566,7 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 	{
 		char	   *pre_value = NULL;
 		int			scres;
-
+		elog(WARNING, "i am alive before ignore 569 guc.c %s %s\n", item->name, item->value);
 		/* Ignore anything marked as ignorable */
 		if (item->ignore)
 			continue;
@@ -5494,6 +5494,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 				struct config_struct *conf = (struct config_struct *) record;
 
 				elog(WARNING, "i am alive in 5472\n");
+				elog(WARNING, "structure 5473 is %p %s", conf->variable, struct_to_str(conf->variable, conf->type));
 				bool is_field = false;
 				/*check that field or whole structure by name*/
 				int offset = 0;
@@ -5511,7 +5512,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 					if (is_field){
 						tmp_record = struct_dup(conf->variable, conf->type);
 						char *type = get_nest_field_type(conf->type, start_path);
-						free_struct_strs((char *)conf->variable + offset, type);
+						free_struct_strs((char *)tmp_record + offset, type);
 						const char **hintmsgs = NULL;
 						char * embedded_str = value;
 						if (!strcmp(type, "string")) {
@@ -5615,9 +5616,10 @@ set_config_with_handle(const char *name, config_handle *handle,
 					record->status &= ~GUC_PENDING_RESTART;
 					return -1;
 				}
-
+				elog(WARNING, "structure 5618 is %p %s", conf->variable, struct_to_str(conf->variable, conf->type));
 				if (changeVal)
 				{
+					elog(WARNING, "i am alive in 5621\n");
 					/* Save old value to support transaction abort */
 					if (!makeDefault)
 						push_old_value(&conf->gen, action);
@@ -5630,10 +5632,13 @@ set_config_with_handle(const char *name, config_handle *handle,
 					set_guc_source(&conf->gen, source);
 					conf->gen.scontext = context;
 					conf->gen.srole = srole;
+					elog(WARNING, "i am alive in 5634\n");
 				}
+				elog(WARNING, "structure 5636 is %p %s", conf->variable, struct_to_str(conf->variable, conf->type));
 
 				if (makeDefault)
 				{
+					elog(WARNING, "i am alive in 5639 but WHY\n");
 					GucStack   *stack;
 
 					if (conf->gen.reset_source <= source)
@@ -5641,14 +5646,19 @@ set_config_with_handle(const char *name, config_handle *handle,
 						set_struct_field(conf, &conf->reset_val, newval, false);
 						set_extra_field(&conf->gen, &conf->reset_extra,
 										newextra);
+						//elog(WARNING, "set struct and extra 5647 guc.c\n");
 						conf->gen.reset_source = source;
 						conf->gen.reset_scontext = context;
 						conf->gen.reset_srole = srole;
 					}
+					elog(WARNING, "I am alive in 5651 guc.c before stack\n");
+					elog(WARNING, "reset structure is %p %s", conf->reset_val, struct_to_str(conf->reset_val, conf->type));
 					for (stack = conf->gen.stack; stack; stack = stack->prev)
 					{
+						//elog(WARNING, "I am alive in 5653 guc.c\n");
 						if (stack->source <= source)
 						{
+							//elog(WARNING, "I am alive in 5655 guc.c\n");
 							set_struct_field(conf, &stack->prior.val.structval,
 											 newval, false);
 							set_extra_field(&conf->gen, &stack->prior.extra,
@@ -5657,12 +5667,17 @@ set_config_with_handle(const char *name, config_handle *handle,
 							stack->scontext = context;
 							stack->srole = srole;
 						}
+						//elog(WARNING, "I am alive in 5665 guc.c\n");
 					}
 				}
-
-				/* Perhaps we didn't install newval anywhere */
-				if (newval && !struct_field_used(conf, newval))
+				elog(WARNING, "I am alive in 5668 guc.c\n");
+				/* Perhaps we didn't install newvaln anywhere */
+				if (newval && !struct_field_used(conf, newval)) {
+					elog (WARNING, "why it is unused?!!!\n");
 					free_struct(newval, conf->type);
+				}
+
+				elog(WARNING, "I am alive in 5669 guc.c\n");
 				/* Perhaps we didn't install newextra anywhere */
 				if (newextra && !extra_field_used(&conf->gen, newextra))
 					guc_free(newextra);
