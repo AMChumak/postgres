@@ -788,7 +788,11 @@ struct type_definition UserDefinedConfigureTypes[] = {
 	},
 	{
 		"wal_state",
-		"bool wal_recycle;int wal_level;real wal_latency;string wal_type"
+		"bool wal_recycle;string wal_type"
+	},
+	{
+		"wal_db",
+		"string db_name; wal_state[4] db"
 	},
 	/* End-of-list marker */
 	{
@@ -5307,6 +5311,15 @@ struct config_struct ConfigureNamesStruct[] =
 		"wal_state",
 		&my_wal_state,
 		&boot_val_wal_state,
+		NULL, NULL, NULL, NULL, NULL, NULL
+	},
+
+	{{"my_wal_db", PGC_USERSET, WAL_SETTINGS,
+		gettext_noop("Stores real huge wal state db "),
+		NULL},
+		"wal_db",
+		&my_wal_db,
+		&boot_val_wal_db,
 		NULL, NULL, NULL, NULL, NULL, NULL
 	},
 

@@ -1438,14 +1438,22 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 		return hentry->gucvar;
 
 	/*struct case*/
-	char *deref_ptr = NULL;
+	char *deref_ptr = NULL, *deref_ptr_b = NULL, *deref_ptr_m = NULL;
 	char *start_path = NULL;
-	if ((deref_ptr = strchr(name, '[')) || (deref_ptr = strchr(name, '-'))) {
+	if ((deref_ptr_b = strchr(name, '[')) || (deref_ptr_m = strchr(name, '-'))) {
+		deref_ptr_m = strchr(name, '-'); //lazy OR in condition before
 
+		if ((deref_ptr_b < deref_ptr_m) && deref_ptr_b) { //take first dereference
+			deref_ptr = deref_ptr_b;
+		} else {
+			deref_ptr = deref_ptr_m;
+		}
+
+		elog(WARNING, "struct 1448 is %p\n", deref_ptr);
 		char *struct_name = guc_malloc(ERROR, (deref_ptr - name + 1) * sizeof(char));
 		strncpy(struct_name, name, (deref_ptr - name));
 		struct_name[deref_ptr - name] = 0;
-
+		elog(WARNING, "struct 1448 is %s\n", struct_name);
 		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
 			&struct_name,
 			HASH_FIND,
@@ -1454,12 +1462,13 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 		guc_free(struct_name);
 
 		if (hentry) {
-
+			elog(WARNING, "found hentry 1457\n");
 			if (*deref_ptr == '[')
 				start_path = deref_ptr;
 			else {
 				start_path = strchr(name, '>') + 1;
 			}
+			elog(WARNING, "type is %s", get_nest_field_type(((struct config_struct *)(hentry->gucvar))->type, start_path));
 			if (get_nest_field_type(((struct config_struct *)(hentry->gucvar))->type , start_path))
 				return hentry->gucvar;
 			else if (skip_errors)
@@ -3820,7 +3829,7 @@ int get_field_offset(const char * type_name, const char *field) {
 		guc_free(array_type);
 		if (!array_type_def)
 			return -1;
-		return array_type_def->offset * field_idx;
+		return array_type_def->type_size * field_idx;
 	}
 
 	//STRUCT CASE
@@ -3839,10 +3848,18 @@ int get_field_offset(const char * type_name, const char *field) {
 			int total_offset = 0;
 
 			for (int i = 0; i < field_idx; i++) {
+				int loc_off = get_type_offset(struct_type->fields[i].type);
+				if (total_offset % loc_off != 0) {
+					total_offset += loc_off - total_offset % loc_off;
+				}
 				int increment = get_type_memory_size(struct_type->fields[i].type);
 				if(increment < 0)
 					return -1;
 				total_offset += increment;
+			}
+			int loc_off = get_type_offset(struct_type->fields[field_idx].type);
+			if (total_offset % loc_off != 0) {
+				total_offset += loc_off - total_offset % loc_off;
 			}
 			return total_offset;
 		}
@@ -3978,14 +3995,10 @@ char *get_nest_field_type(const char * struct_type, const char *field_path) {
 	if (!struct_type || !field_path) {
 		return NULL;
 	}
+	elog(WARNING, "3981 struct %s field %s\n", struct_type, field_path);
+	char *path = guc_strdup(ERROR, field_path);
 
-	char *path = (char *)guc_malloc(ERROR, (strlen(field_path) + 1) * sizeof(char));
-	path[strlen(field_path)] = 0;
-	strcpy(path, field_path);
-
-	char *type = (char *)guc_malloc(ERROR, (strlen(struct_type) + 1) * sizeof(char));
-	type[strlen(struct_type)] = 0;
-	strcpy(type, struct_type);
+	char *type = guc_strdup(ERROR, struct_type);
 
 	char *cur_field = tokenize_field_path(path);
 
@@ -4005,14 +4018,8 @@ int get_nest_field_offset(const char *struct_type, const char *field_path) {
 		return -1;
 	}
 
-	char *path = (char *)guc_malloc(ERROR, (strlen(field_path) + 1) * sizeof(char));
-	path[strlen(field_path)] = 0;
-	strcpy(path, field_path);
-
-	char *type = (char *)guc_malloc(ERROR, (strlen(struct_type) + 1) * sizeof(char));
-	type[strlen(struct_type)] = 0;
-	strcpy(type, struct_type);
-
+	char *path = guc_strdup(ERROR, field_path);
+	char *type = guc_strdup(ERROR, struct_type);
 	int total_offset = 0;
 
 	char *cur_field = tokenize_field_path(path);
@@ -5512,7 +5519,12 @@ set_config_with_handle(const char *name, config_handle *handle,
 					if (is_field){
 						tmp_record = struct_dup(conf->variable, conf->type);
 						char *type = get_nest_field_type(conf->type, start_path);
+						elog(WARNING, "type is %s", type);
+						struct_to_str(tmp_record, conf->type);
+						elog (WARNING, "LOVE ME OR LEAVE ME\n");
 						free_struct_strs((char *)tmp_record + offset, type);
+						char *test = struct_to_str(tmp_record, conf->type);
+						elog(WARNING, "i am alive in 5525 %s\n", test);
 						const char **hintmsgs = NULL;
 						char * embedded_str = value;
 						if (!strcmp(type, "string")) {
@@ -5523,6 +5535,9 @@ set_config_with_handle(const char *name, config_handle *handle,
 							embedded_str[strlen(value)+2] = 0;
 						}
 						bool check = parse_struct_impl(embedded_str, type, (char *)tmp_record + offset, 0, hintmsgs);
+						elog(WARNING, "i am alive in 5540 %d %d %s\n", check, offset, embedded_str);
+						char *test2 = struct_to_str(tmp_record, conf->type);
+						elog(WARNING, "i am alive in 5542 %s\n", test2);
 						if (!strcmp(type, "string")) {
 							guc_free(embedded_str);
 						}
@@ -5532,11 +5547,10 @@ set_config_with_handle(const char *name, config_handle *handle,
 							return 0;
 						}
 						guc_free(type);
-
 						str_val = struct_to_str(tmp_record, conf->type);
-
+						elog(WARNING, "i am alive in 5553\n");
 					}
-
+					elog(WARNING, "i am alive in 5555\n");
 
 					if (!parse_and_validate_value(record, str_val,
 												source, elevel,

@@ -137,9 +137,12 @@ int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
 
 
-struct wal_state my_wal_state = {false, 0, 1.5, NULL};
+struct wal_state my_wal_state = {false, NULL};
 
-struct wal_state boot_val_wal_state = {false, 0, 1.5, NULL};
+struct wal_state boot_val_wal_state = {false, NULL};
+
+struct wal_db my_wal_db;
+struct wal_db boot_val_wal_db;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;

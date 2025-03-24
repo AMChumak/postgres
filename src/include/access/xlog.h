@@ -30,9 +30,12 @@ enum WalSyncMethod
 
 struct wal_state {
 	bool wal_recycle_f;
-	int  wal_level_f;
-	double wal_latency;
 	char *wal_type;
+};
+
+struct wal_db {
+	char *db_name;
+	struct wal_state db[4];
 };
 
 extern PGDLLIMPORT int wal_sync_method;
@@ -66,6 +69,9 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 extern PGDLLIMPORT struct wal_state my_wal_state;
 extern PGDLLIMPORT struct wal_state boot_val_wal_state;
+extern PGDLLIMPORT struct wal_db my_wal_db;
+extern PGDLLIMPORT struct wal_db boot_val_wal_db;
+
 
 extern PGDLLIMPORT int CheckPointSegments;
 
