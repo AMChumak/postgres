@@ -1,0 +1,5 @@
+# hello_world extension
+comment='New abilities for exploration pg!'
+default_version = '1.2'
+module_pathname = '$libdir/hello_world'
+relocatable = true

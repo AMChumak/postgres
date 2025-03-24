@@ -71,6 +71,8 @@ extern PGDLLIMPORT struct wal_state my_wal_state;
 extern PGDLLIMPORT struct wal_state boot_val_wal_state;
 extern PGDLLIMPORT struct wal_db my_wal_db;
 extern PGDLLIMPORT struct wal_db boot_val_wal_db;
+extern PGDLLIMPORT int wal_levels[10];
+extern PGDLLIMPORT int wal_boot_levels[10];
 
 
 extern PGDLLIMPORT int CheckPointSegments;

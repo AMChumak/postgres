@@ -5323,6 +5323,16 @@ struct config_struct ConfigureNamesStruct[] =
 		NULL, NULL, NULL, NULL, NULL, NULL
 	},
 
+	{{"my_wal_lvls", PGC_USERSET, WAL_SETTINGS,
+		gettext_noop("example of array"),
+		NULL},
+		"int[10]",
+		&wal_levels,
+		&wal_boot_levels,
+		NULL, NULL, NULL, NULL, NULL, NULL
+
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL

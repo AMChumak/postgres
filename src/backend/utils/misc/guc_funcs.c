@@ -774,10 +774,10 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 				struct config_struct *lconf = (struct config_struct *) conf;
 				elog(WARNING, "IN STRUCT CASE 774 alive!\n");
 				/* vartype */
-				char *type_lbl = guc_malloc(ERROR, (strlen(lconf->type) + strlen(lconf->definition->signature) + 10) * sizeof(char));
+				char *type_lbl = guc_malloc(ERROR, (strlen(lconf->type) + 8) * sizeof(char));
 				type_lbl[0] = 0;
 				elog(WARNING, "IN STRUCT CASE 777 alive!\n");
-				strcat(strcat(strcat(strcat(strcat(type_lbl,config_type_names[conf->vartype]), " "), lconf->type),": "), lconf->definition->signature);
+				strcat(strcat(strcat(type_lbl,config_type_names[conf->vartype]), " "), lconf->type);
 				values[7] = pstrdup(type_lbl);
 				guc_free(type_lbl);
 				elog(WARNING, "IN STRUCT CASE 780 alive!\n");

@@ -1273,8 +1273,9 @@ valid_custom_variable_name(const char *name)
 				name_start = true;
 				is_field = true;
 				p++;
+			}else {
+				return false;
 			}
-			return false;
 		} else if (!name_start && *p == '['){
 			p++;
 			while (strchr("0123456789", *p) != NULL) {
@@ -1282,8 +1283,9 @@ valid_custom_variable_name(const char *name)
 			}
 			if (*p == ']' && !*(p+1) || *(p+1) == '-'){
 				is_field = true;
+			} else {
+				return false;
 			}
-			return false;
 		}
 		else
 			return false;
@@ -1309,6 +1311,7 @@ valid_custom_variable_name(const char *name)
 static bool
 assignable_custom_variable_name(const char *name, bool skip_errors, int elevel)
 {
+	elog(WARNING, "assign_placeholder for %s\n", name);
 	/* If there's no separator, it can't be a custom variable */
 	const char *sep = strchr(name, GUC_QUALIFIER_SEPARATOR);
 
@@ -1346,6 +1349,7 @@ assignable_custom_variable_name(const char *name, bool skip_errors, int elevel)
 				return false;
 			}
 		}
+		elog(WARNING, "success 1352");
 		/* OK to create it */
 		return true;
 	}
@@ -1443,7 +1447,7 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 	if ((deref_ptr_b = strchr(name, '[')) || (deref_ptr_m = strchr(name, '-'))) {
 		deref_ptr_m = strchr(name, '-'); //lazy OR in condition before
 
-		if ((deref_ptr_b < deref_ptr_m) && deref_ptr_b) { //take first dereference
+		if (((deref_ptr_b < deref_ptr_m) && deref_ptr_b) || !deref_ptr_m) { //take first dereference
 			deref_ptr = deref_ptr_b;
 		} else {
 			deref_ptr = deref_ptr_m;
@@ -1493,8 +1497,18 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 		/*
 		 * Check if the name is valid, and if so, add a placeholder.
 		 */
-		if (assignable_custom_variable_name(name, skip_errors, elevel))
+		if (assignable_custom_variable_name(name, skip_errors, elevel)) {
+			if (deref_ptr) {
+				char *struct_name = guc_malloc(ERROR, (deref_ptr - name + 1) * sizeof(char));
+				strncpy(struct_name, name, (deref_ptr - name));
+				struct_name[deref_ptr - name] = 0;
+				struct config_generic *result = add_placeholder_variable(struct_name, elevel);
+				guc_free(struct_name);
+				elog(WARNING, "go out 1507\n");
+				return result;
+			}
 			return add_placeholder_variable(name, elevel);
+		}
 		else
 			return NULL;		/* error message, if any, already emitted */
 	}
@@ -2006,7 +2020,7 @@ InitializeOneGUCOption(struct config_generic *gconf)
 				if (!conf->type) {
 					conf->type = conf->definition->type;
 				}
-				if (!conf->definition) {
+				if (!conf->definition && !is_array_type(conf->type)) {
 					conf->definition = try_find_type(conf->type);
 					if (!conf->definition) {
 						elog(FATAL, "failed to initialize %s. Undefined type %s",
@@ -2033,7 +2047,8 @@ InitializeOneGUCOption(struct config_generic *gconf)
 				if (conf->assign_hook)
 					conf->assign_hook(newval, extra);
 				conf->reset_val = newval;
-				memcpy(conf->variable, newval, conf->definition->type_size);
+				int valsize = get_type_memory_size(conf->type);
+				memcpy(conf->variable, newval, valsize);
 				conf->gen.extra = conf->reset_extra = extra;
 				break;
 			}
@@ -2382,7 +2397,8 @@ ResetAllOptions(void)
 					if (conf->assign_hook)
 						conf->assign_hook(conf->reset_val,
 										  conf->reset_extra);
-					memcpy(conf->variable, conf->reset_val, conf->definition->type_size);
+					int valsize = get_type_memory_size(conf->type);
+					memcpy(conf->variable, conf->reset_val, valsize);
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									conf->reset_extra);
 					break;
@@ -2813,7 +2829,8 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 								if (conf->assign_hook)
 									conf->assign_hook(newval, newextra);
 								set_struct_field(conf, &conf->variable, newval, true);
-								memcpy(conf->variable, newval, conf->definition->type_size);
+								int valsize = get_type_memory_size(conf->type);
+								memcpy(conf->variable, newval, valsize);
 								set_extra_field(&conf->gen, &conf->gen.extra,
 												newextra);
 								changed = true;
@@ -4670,8 +4687,11 @@ set_config_with_handle(const char *name, config_handle *handle,
 	if (!handle)
 	{
 		record = find_option(name, true, false, elevel);
-		if (record == NULL)
+		elog(WARNING, "i am alive in 4690!\n");
+		if (record == NULL){
+			elog(WARNING, "Hmmm\n");
 			return 0;
+		}
 	}
 	else
 		record = handle;
@@ -4938,6 +4958,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 		case PGC_BOOL:
 			{
 				struct config_bool *conf = (struct config_bool *) record;
+				elog (WARNING, "i am bool %s 4961\n", name);
 
 #define newval (newval_union.boolval)
 
@@ -5235,6 +5256,8 @@ set_config_with_handle(const char *name, config_handle *handle,
 				GucContext	orig_context = context;
 				GucSource	orig_source = source;
 				Oid			orig_srole = srole;
+
+				elog (WARNING, "i am string %s 5260\n", name);
 
 #define newval (newval_union.stringval)
 
@@ -6733,6 +6756,11 @@ DefineCustomStructVariable(const char *name,
 	var->check_hook = check_hook;
 	var->assign_hook = assign_hook;
 	var->show_hook = show_hook;
+	if (is_array_type(var->type)) {
+		var->definition = NULL;
+	} else {
+		var->definition = try_find_type(var->type);
+	}
 	define_custom_variable(&var->gen);
 }
 
