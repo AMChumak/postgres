@@ -578,7 +578,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		Sconst comment_text notify_payload
 %type <str>		RoleId opt_boolean_or_string
 %type <list>	var_list
-%type <str>		ColId ColLabel BareColLabel
+%type <str>		ColId ColLabel BareColLabel IndexCh
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
 %type <str>		var_name type_function_name param_name
 %type <str>		createdb_opt_name plassign_target
@@ -685,7 +685,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  * DOT_DOT is unused in the core SQL grammar, and so will always provoke
  * parse errors.  It is needed by PL/pgSQL.
  */
-%token <str>	IDENT UIDENT FCONST SCONST USCONST BCONST XCONST Op
+%token <str>	IDENT UIDENT FCONST SCONST USCONST BCONST XCONST DEREF Op
 %token <ival>	ICONST PARAM
 %token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
 %token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
@@ -1805,10 +1805,19 @@ set_rest_more:	/* Generic SET syntaxes: */
 				}
 		;
 
+
+
 var_name:	ColId								{ $$ = $1; }
 			| var_name '.' ColId
 				{ $$ = psprintf("%s.%s", $1, $3); }
+			| var_name DEREF ColId
+				{$$ = psprintf("%s->%s", $1, $3);}
+			| var_name IndexCh
+				{$$ = psprintf("%s%s", $1, $2);}
 		;
+
+IndexCh: '['ICONST']' { $$ = psprintf("[%d]", $2); };
+
 
 var_list:	var_value								{ $$ = list_make1($1); }
 			| var_list ',' var_value				{ $$ = lappend($1, $3); }
