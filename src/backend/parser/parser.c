@@ -41,7 +41,6 @@ static char *str_udeescape(const char *str, char escape,
 List *
 raw_parser(const char *str, RawParseMode mode)
 {
-	elog(WARNING, "Hello from parser 44\n");
 	core_yyscan_t yyscanner;
 	base_yy_extra_type yyextra;
 	int			yyresult;
@@ -49,7 +48,6 @@ raw_parser(const char *str, RawParseMode mode)
 	/* initialize the flex scanner */
 	yyscanner = scanner_init(str, &yyextra.core_yy_extra,
 							 &ScanKeywords, ScanKeywordTokens);
-	elog(WARNING, "Hello from parser 52\n");
 	/* base_yylex() only needs us to initialize the lookahead token, if any */
 	if (mode == RAW_PARSE_DEFAULT)
 		yyextra.have_lookahead = false;
@@ -70,13 +68,10 @@ raw_parser(const char *str, RawParseMode mode)
 		yyextra.lookahead_yylloc = 0;
 		yyextra.lookahead_end = NULL;
 	}
-	elog(WARNING, "Hello from parser 73\n");
 	/* initialize the bison parser */
 	parser_init(&yyextra);
-	elog(WARNING, "Hello from parser 76\n");
 	/* Parse! */
 	yyresult = base_yyparse(yyscanner);
-	elog(WARNING, "Hello from parser 79\n");
 	/* Clean up (release memory) */
 	scanner_finish(yyscanner);
 

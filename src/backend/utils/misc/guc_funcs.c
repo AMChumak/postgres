@@ -770,17 +770,13 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 
 		case PGC_STRUCT:
 			{
-				elog(WARNING, "IN STRUCT CASE 772 alive!\n");
 				struct config_struct *lconf = (struct config_struct *) conf;
-				elog(WARNING, "IN STRUCT CASE 774 alive!\n");
 				/* vartype */
 				char *type_lbl = guc_malloc(ERROR, (strlen(lconf->type) + 8) * sizeof(char));
 				type_lbl[0] = 0;
-				elog(WARNING, "IN STRUCT CASE 777 alive!\n");
 				strcat(strcat(strcat(type_lbl,config_type_names[conf->vartype]), " "), lconf->type);
 				values[7] = pstrdup(type_lbl);
 				guc_free(type_lbl);
-				elog(WARNING, "IN STRUCT CASE 780 alive!\n");
 				/* min_val */
 				values[9] = NULL;
 
@@ -789,19 +785,14 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 
 				/* enumvals */
 				values[11] = NULL;
-				elog(WARNING, "IN STRUCT CASE 789 alive!\n");
 				/* boot_val */
 				if (lconf->boot_val == NULL)
 					values[12] = NULL;
 				else {
-					elog(WARNING, "IN STRUCT CASE 794 alive! %p\n", lconf->boot_val);
 					char *boot_v = struct_to_str(lconf->boot_val, lconf->type);
-					elog(WARNING, "IN STRUCT CASE 795 alive! %p\n", boot_v);
 					values[12] = pstrdup(boot_v);
-					elog(WARNING, "IN STRUCT CASE 796 alive! %p\n");
 					guc_free(boot_v);
 				}
-				elog(WARNING, "IN STRUCT CASE 797 alive!\n");
 				/* reset_val */
 				if (lconf->reset_val == NULL)
 					values[13] = NULL;
@@ -810,7 +801,6 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 					values[13] = pstrdup(reset);
 					guc_free(reset);
 				}
-				elog(WARNING, "IN STRUCT CASE 806 alive!\n");
 			}
 			break;
 
@@ -997,7 +987,6 @@ show_all_settings(PG_FUNCTION_ARGS)
 
 	while (call_cntr < max_calls)	/* do when there is more left to send */
 	{
-		elog(WARNING, "991 alive! %d %d\n", call_cntr, max_calls);
 		struct config_generic *conf = guc_vars[call_cntr];
 		char	   *values[NUM_PG_SETTINGS_ATTS];
 		HeapTuple	tuple;
@@ -1013,15 +1002,11 @@ show_all_settings(PG_FUNCTION_ARGS)
 
 		/* extract values for the current variable */
 		GetConfigOptionValues(conf, (const char **) values);
-		elog(WARNING, "1006 alive!\n");
 		/* build a tuple */
 		tuple = BuildTupleFromCStrings(attinmeta, values);
-		elog(WARNING, "1009 alive!\n");
 		/* make the tuple into a datum */
 		result = HeapTupleGetDatum(tuple);
-		elog(WARNING, "1012 alive!\n");
 		SRF_RETURN_NEXT(funcctx, result);
-		elog(WARNING, "1014 alive!\n");
 	}
 
 	/* do when there is no more left */

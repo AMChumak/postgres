@@ -1100,7 +1100,6 @@ other			.
 					 * if necessary.
 					 */
 					ident = downcase_truncate_identifier(yytext, yyleng, true);
-					elog(WARNING, "Found identifier %s\n", ident);
 					yylval->str = ident;
 					return IDENT;
 				}

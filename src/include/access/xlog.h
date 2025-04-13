@@ -67,6 +67,8 @@ extern PGDLLIMPORT int CommitDelay;
 extern PGDLLIMPORT int CommitSiblings;
 extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
+
+
 extern PGDLLIMPORT struct wal_state my_wal_state;
 extern PGDLLIMPORT struct wal_state boot_val_wal_state;
 extern PGDLLIMPORT struct wal_db my_wal_db;

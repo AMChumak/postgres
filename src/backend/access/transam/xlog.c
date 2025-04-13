@@ -138,8 +138,8 @@ bool		track_wal_io_timing = false;
 
 
 struct wal_state my_wal_state = {false, NULL};
-
 struct wal_state boot_val_wal_state = {false, NULL};
+
 int wal_levels[10];
 int wal_boot_levels[10];
 

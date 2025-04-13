@@ -82,7 +82,7 @@ void _PG_init(void) {
     DefineCustomStructType(node_typename, node_signature);
     DefineCustomStructVariable("hello_world.my_node", "physical node", "this structure describes on node of cluster",
         node_typename, &my_node, &my_boot_node, PGC_USERSET, 0, NULL, NULL, NULL);
-    DefineCustomBoolVariable("hello_world.log_enabled", "this flag turns logging on/off",\
+    DefineCustomBoolVariable("i", "this flag turns logging on/off",\
      "this flag turns logging on/off - if true then logging is on else logging is off",\
         &hello_logs, true, PGC_USERSET, 0, NULL, NULL, NULL);
 
@@ -125,12 +125,12 @@ static void custom_shmem_startup(void) {
 
     if(prev_shmem_startup_hook)
         prev_shmem_startup_hook();
-    
+
 
     LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
     sharedStruct = ShmemInitStruct("SharedStruct", sizeof(SharedStruct), &found);
-    
+
     if(!found) {
         sharedStruct->count = 0;
         sharedStruct->lock =
