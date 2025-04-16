@@ -566,7 +566,6 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 	{
 		char	   *pre_value = NULL;
 		int			scres;
-		elog(WARNING, "i am alive before ignore 569 guc.c %s %s\n", item->name, item->value);
 		/* Ignore anything marked as ignorable */
 		if (item->ignore)
 			continue;
@@ -582,7 +581,6 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 			/* must dup, else might have dangling pointer below */
 			pre_value = pstrdup(preval);
 		}
-		elog(WARNING, "i am alive in 585 guc.c %s %s\n", item->name, item->value);
 		scres = set_config_option(item->name, item->value,
 								  context, PGC_S_FILE,
 								  GUC_ACTION_SET, applySettings, 0, false);
@@ -5499,7 +5497,16 @@ set_config_with_handle(const char *name, config_handle *handle,
 				/*check that field or whole structure by name*/
 				int offset = 0;
 				char *start_path = NULL;
-				if (name && ((start_path = strchr(name, '-')) || (start_path = strchr(name,'[')))){
+				char *start_path_m = NULL;
+				char *start_path_b = NULL;
+				if (name && ((start_path_m = strchr(name, '-')) || (start_path_b = strchr(name,'[')))){
+					start_path_b = strchr(name,'['); //lazy OR in condition
+
+					if (((start_path_b < start_path_m) && start_path_b) || !start_path_m) { //take first dereference
+						start_path = start_path_b;
+					} else {
+						start_path = start_path_m;
+					}
 					offset = get_nest_field_offset(conf->type, start_path);
 					is_field = true;
 				}
@@ -6933,6 +6940,28 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 
 	if (varname)
 		*varname = record->name;
+
+	char *start_path = NULL;
+	char *start_path_m = NULL;
+	char *start_path_b = NULL;
+
+	if ((start_path_m = strchr(name, '-')) || (start_path_b = strchr(name,'['))) { // yes it's so sloppy but SHowGucOption can't use string as parameter
+
+		start_path_b = strchr(name,'['); //lazy OR in condition
+
+		if (((start_path_b < start_path_m) && start_path_b) || !start_path_m) { //take first dereference
+			start_path = start_path_b;
+		} else {
+			start_path = start_path_m;
+		}
+		struct config_struct *conf = (struct config_struct *)record;
+
+		int offset = get_nest_field_offset(conf->type, start_path);
+		char *  field_type = get_nest_field_type(conf->type, start_path);
+		char * str_opt = struct_to_str((char *)conf->variable + offset, field_type);
+		guc_free(field_type);
+		return str_opt;
+	}
 
 	return ShowGUCOption(record, true);
 }

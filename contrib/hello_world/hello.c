@@ -34,6 +34,10 @@ SharedStruct *sharedStruct;
 char *message = "advantage C hello, world!";
 static bool hello_logs = true;
 
+
+
+
+
 struct node {
     char *name;
     int state;
@@ -41,6 +45,10 @@ struct node {
 
 struct node my_node = {NULL, 42};
 struct node my_boot_node = {NULL, 42};
+
+
+
+
 
 PG_MODULE_MAGIC;
 
@@ -77,11 +85,24 @@ Datum get_logs_count(PG_FUNCTION_ARGS) {
 
 
 void _PG_init(void) {
+
+
+
+
     const char *node_typename = "node";
     const char *node_signature = "string name; int state";
+
     DefineCustomStructType(node_typename, node_signature);
+
     DefineCustomStructVariable("hello_world.my_node", "physical node", "this structure describes on node of cluster",
         node_typename, &my_node, &my_boot_node, PGC_USERSET, 0, NULL, NULL, NULL);
+
+
+
+
+
+
+
     DefineCustomBoolVariable("i", "this flag turns logging on/off",\
      "this flag turns logging on/off - if true then logging is on else logging is off",\
         &hello_logs, true, PGC_USERSET, 0, NULL, NULL, NULL);

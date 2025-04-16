@@ -788,11 +788,11 @@ struct type_definition UserDefinedConfigureTypes[] = {
 	},
 	{
 		"wal_state",
-		"bool wal_recycle;string wal_type"
+		"bool wal_recycle;string sync_method"
 	},
 	{
-		"wal_db",
-		"string db_name; wal_state[4] db"
+		"wal_set",
+		"string set_name; wal_state[4] set"
 	},
 	/* End-of-list marker */
 	{
@@ -5305,30 +5305,30 @@ struct config_enum ConfigureNamesEnum[] =
 
 struct config_struct ConfigureNamesStruct[] =
 {
-	{{"my_wal_state", PGC_USERSET, WAL_SETTINGS,
+	{{"wal_state_common", PGC_USERSET, WAL_SETTINGS,
 		gettext_noop("Displays important info"),
 		NULL},
 		"wal_state",
-		&my_wal_state,
-		&boot_val_wal_state,
+		&wal_state_common,
+		&boot_wal_state,
 		NULL, NULL, NULL, NULL, NULL, NULL
 	},
 
-	{{"my_wal_db", PGC_USERSET, WAL_SETTINGS,
+	{{"wal_set_common", PGC_USERSET, WAL_SETTINGS,
 		gettext_noop("Stores real huge wal state db "),
 		NULL},
-		"wal_db",
-		&my_wal_db,
-		&boot_val_wal_db,
+		"wal_set",
+		&wal_set_common,
+		&boot_wal_set,
 		NULL, NULL, NULL, NULL, NULL, NULL
 	},
 
-	{{"my_wal_lvls", PGC_USERSET, WAL_SETTINGS,
+	{{"wal_buf_sizes", PGC_USERSET, WAL_SETTINGS,
 		gettext_noop("example of array"),
 		NULL},
 		"int[10]",
-		&wal_levels,
-		&wal_boot_levels,
+		&wal_buffer_sizes,
+		&wal_boot_buffer_sizes,
 		NULL, NULL, NULL, NULL, NULL, NULL
 
 	},

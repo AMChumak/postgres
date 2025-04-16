@@ -28,15 +28,7 @@ enum WalSyncMethod
 	WAL_SYNC_METHOD_OPEN_DSYNC	/* for O_DSYNC */
 };
 
-struct wal_state {
-	bool wal_recycle_f;
-	char *wal_type;
-};
 
-struct wal_db {
-	char *db_name;
-	struct wal_state db[4];
-};
 
 extern PGDLLIMPORT int wal_sync_method;
 
@@ -69,12 +61,27 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 
-extern PGDLLIMPORT struct wal_state my_wal_state;
-extern PGDLLIMPORT struct wal_state boot_val_wal_state;
-extern PGDLLIMPORT struct wal_db my_wal_db;
-extern PGDLLIMPORT struct wal_db boot_val_wal_db;
-extern PGDLLIMPORT int wal_levels[10];
-extern PGDLLIMPORT int wal_boot_levels[10];
+
+struct wal_state {
+	bool wal_recycle;
+	char *sync_method;
+};
+
+struct wal_states_set {
+	char *set_name;
+	struct wal_state set[4];
+};
+
+extern PGDLLIMPORT struct wal_state wal_state_common;
+extern PGDLLIMPORT struct wal_state boot_wal_state;
+
+extern PGDLLIMPORT struct wal_states_set wal_set_common;
+extern PGDLLIMPORT struct wal_states_set boot_wal_set;
+
+extern PGDLLIMPORT int wal_buffer_sizes[10];
+extern PGDLLIMPORT int wal_boot_buffer_sizes[10];
+
+
 
 
 extern PGDLLIMPORT int CheckPointSegments;
