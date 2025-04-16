@@ -140,8 +140,8 @@ bool		track_wal_io_timing = false;
 
 
 
-struct wal_state wal_state_common = {true, NULL};
-struct wal_state boot_wal_state = {true, NULL};
+struct wal_state wal_state_common;
+struct wal_state boot_wal_state = {true, "open"};
 
 struct wal_states_set wal_set_common;
 struct wal_states_set boot_wal_set;

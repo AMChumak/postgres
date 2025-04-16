@@ -1730,9 +1730,15 @@ check_GUC_init(struct config_generic *gconf)
 		case PGC_STRUCT:
 			{
 				struct config_struct *conf = (struct config_struct *) gconf;
-				if (conf->variable != NULL && conf->variable != conf->boot_val) {
-					if (struct_cmp(conf->variable, conf->boot_val, conf->type))
-					{
+				bool is_null = true;
+				int type_size = get_type_memory_size(conf->type);
+				for (int i = 0; i < type_size; ++i) {
+					if (*((char*)(conf->variable) + i) != 0){
+						is_null = false;
+						break;
+					}
+				}
+				if (!is_null && struct_cmp(conf->variable, conf->boot_val, conf->type)) {
 						char *boot_str = struct_to_str(conf->boot_val, conf->type);
 						char *var_str = struct_to_str(conf->variable, conf->type);
 						elog(LOG, "GUC (PGC_STRUCT %s) %s, boot_val=%s, C-var=%s",
@@ -1740,9 +1746,8 @@ check_GUC_init(struct config_generic *gconf)
 						guc_free(boot_str);
 						guc_free(var_str);
 						return false;
-					}
-					break;
 				}
+				break;
 			}
 	}
 
@@ -2013,17 +2018,11 @@ InitializeOneGUCOption(struct config_generic *gconf)
 					}
 				}
 
-				if (conf->boot_val != NULL)
-					newval = struct_dup(conf->boot_val, conf->type);
-				else
-				 	newval = NULL;
-
 				/* non-NULL boot_val must always get strdup'd */
 				if (conf->boot_val != NULL)
 					newval = struct_dup(conf->boot_val, conf->type);
 				else
 					newval = NULL;
-
 				if (!call_struct_check_hook(conf, newval, &extra,
 											PGC_S_DEFAULT, LOG))
 					elog(FATAL, "failed to initialize %s to %s",
@@ -3868,11 +3867,19 @@ int get_field_offset(const char * type_name, const char *field) {
 	int i = 0;
 	int total_offset = 0;
 	while (i < struct_type->cnt_fields && strcmp(struct_type->fields[i].name, field)) {
+		int loc_off = get_type_offset(struct_type->fields[i].type);
+		if (total_offset % loc_off != 0) {
+			total_offset += loc_off - total_offset % loc_off;
+		}
 		int increment = get_type_memory_size(struct_type->fields[i].type);
 		if(increment < 0)
 			return -1;
 		total_offset += increment;
 		i++;
+	}
+	int loc_off = get_type_offset(struct_type->fields[i].type);
+	if (total_offset % loc_off != 0) {
+		total_offset += loc_off - total_offset % loc_off;
 	}
 	if(i < struct_type->cnt_fields)
 		return total_offset;
