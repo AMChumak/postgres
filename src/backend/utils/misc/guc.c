@@ -286,6 +286,7 @@ static bool call_enum_check_hook(struct config_enum *conf, int *newval,
 static bool call_struct_check_hook(struct config_struct *conf, void *newval,
 								 void **extra, GucSource source, int elevel);
 // functions for user types
+int get_field_offset(const char * type_name, const char *field);
 void init_type_definition(struct type_definition *definition);
 char *get_type_of_array(const char * array_type_name);
 struct type_definition *try_find_type(const char *type_name);
@@ -799,14 +800,21 @@ struct_field_used(struct config_struct *conf, void *structval)
 static void
 set_struct_field(struct config_struct *conf, void **field, void *newval, bool is_variable)
 {
+	elog(WARNING, "i am alive 802\n");
 	void	   *oldval = *field;
+	elog(WARNING, "i am alive 805\n");
 	/* Do the assignment */
 	if (is_variable){
+		elog(WARNING, "i am alive 807\n");
 		free_struct_strs(*field, conf->type);
+		elog(WARNING, "i am alive 809 %s\n", conf->type);
+		elog (WARNING,"alive 810 %s\n:", struct_to_str(newval, conf->type));
 		struct_dup_impl(*field, newval, conf->type);
+		elog(WARNING, "i am alive 811 %s\n", struct_to_str(*field, conf->type));
 	}
 	else{
 		*field = struct_dup(newval, conf->type);
+		//elog(WARNING, "i am alive 817 %s\n", struct_to_str(*field, conf->type));
 	}
 
 	/* Free old value if it's not NULL and isn't referenced anymore */
@@ -3532,7 +3540,6 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 		int curl_br_cnt = 0; // counter of curly braces nesting (without extern array layer)
 		int sqr_br_cnt = 0; // counter of square braces nesting
 		int pos = 0; //position in structure
-		int offset = 0; //offset in structure
 		while (*c) {
 			if (*c == '\'' && *(c - 1) != '\\' )
 				in_str ^= true;
@@ -3544,9 +3551,10 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 				*c = 0;
 				end_ptr = c;
 				const char *field_type = type_def->fields[pos].type;
+				int offset = get_field_offset(type, type_def->fields[pos].name);
+				elog(WARNING, "offset of field %s is %d",type_def->fields[pos].name,offset);
 				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + offset, flags, hintmsg);
 				st_ptr = end_ptr+1;
-				offset += get_type_memory_size(field_type);
 				pos++;
 				if (!check)
 					return false;
@@ -3559,8 +3567,9 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 				*c = 0;
 				end_ptr = c;
 				const char *field_type = type_def->fields[pos].type;
+				int offset = get_field_offset(type, type_def->fields[pos].name);
+				elog(WARNING, "offset of field %s is %d",type_def->fields[pos].name,offset);
 				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + offset, flags, hintmsg);
-				offset += get_type_memory_size(field_type);
 				pos++;
 				if (!check)
 					return false;
@@ -3616,6 +3625,7 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 		*c = 0;
 		char *newval = guc_malloc(ERROR, (c - st_ptr + 1) * sizeof(char));
 		sprintf(newval, "%s", st_ptr);
+		elog(WARNING,"3625 string is %s", newval);
 		*((char **)result) = newval;
 		return true;
 	}
@@ -4113,7 +4123,9 @@ char *struct_to_str(const void *structp, const char *type) {
 	char **parts = (char **)guc_malloc(ERROR, struct_type->cnt_fields * sizeof(char *));
 	int total_size = 3;
 	for (int i = 0; i < struct_type->cnt_fields; i++) {
+		elog(WARNING, "%d: %s %s", i, struct_type->fields[i].type, struct_type->fields[i].name);
 		parts[i] = struct_to_str((char *)structp + get_field_offset(struct_type->type, struct_type->fields[i].name), struct_type->fields[i].type);
+		elog(WARNING, "%s",parts[i]);
 		total_size += strlen(parts[i]) + 2;
 	}
 	char *glue_struct = (char *)guc_malloc(ERROR, total_size * sizeof(char));
@@ -4130,6 +4142,7 @@ char *struct_to_str(const void *structp, const char *type) {
 	glue_struct[total_size-1] = 0;
 	guc_free(parts[struct_type->cnt_fields - 1]);
 	guc_free(parts);
+	elog(WARNING, "%s",glue_struct);
 	return glue_struct;
 }
 
@@ -4192,10 +4205,12 @@ void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type
 
 	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
 		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
+			elog(WARNING, "start copy string %s\n", *(char **)src_struct);
 			if (*(char **)src_struct)
 				*(char **)dest_struct = guc_strdup(ERROR, *(char **)src_struct);
 			else
 				*(char **)dest_struct = NULL;
+			elog(WARNING, "end_copy\n");
 			return;
 		}
 		memcpy(dest_struct, src_struct, struct_type->type_size);
@@ -4205,6 +4220,7 @@ void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type
 
 	for (int i = 0; i < struct_type->cnt_fields; i++) {
 		int field_offset = get_field_offset(type, struct_type->fields[i].name);
+		elog(WARNING, "field %d offset is %d\n",i, field_offset);
 		struct_dup_impl((char *)dest_struct + field_offset, (char *)src_struct + field_offset, struct_type->fields[i].type);
 	}
 }
@@ -4505,6 +4521,7 @@ parse_and_validate_value(struct config_generic *record,
 			break;
 		case PGC_STRUCT:
 			{
+				elog(WARNING, "hello from parsing structure 4517\n");
 				struct config_struct *conf = (struct config_stuct *) record;
 				const char *hintmsg;
 				if (!parse_struct(value, conf->type, &newval->structval,
@@ -4517,6 +4534,7 @@ parse_and_validate_value(struct config_generic *record,
 							hintmsg ? errhint("%s", _(hintmsg)) : 0));
 					return false;
 				}
+				elog(WARNING, "result 4530 is %s\n", struct_to_str(newval->structval, conf->type));
 
 				if (!call_struct_check_hook(conf, newval->structval, newextra,
 					source, elevel))
@@ -5499,6 +5517,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 			}
 		case PGC_STRUCT:
 			{
+				elog(LOG, "Hello %s %s\n", name, value);
 				struct config_struct *conf = (struct config_struct *) record;
 				bool is_field = false;
 				/*check that field or whole structure by name*/
@@ -5518,9 +5537,12 @@ set_config_with_handle(const char *name, config_handle *handle,
 					is_field = true;
 				}
 
+
+
 #define newval (newval_union.structval)
 				if (value)
 				{
+					elog(WARNING,"I am from value 5538\n");
 					char *str_val = value;
 					void *tmp_record = NULL; //there is snapshot of modified structure will be saved
 					if (is_field){
@@ -5594,13 +5616,13 @@ set_config_with_handle(const char *name, config_handle *handle,
 					* struct_dup not needed, since reset_val is already under
 					* guc.c's control
 					*/
+					elog(WARNING,"I am from reset\n");
 					newval = conf->reset_val;
 					newextra = conf->reset_extra;
 					source = conf->gen.reset_source;
 					context = conf->gen.reset_scontext;
 					srole = conf->gen.reset_srole;
 				}
-
 
 				if (prohibitValueChange)
 				{
@@ -5630,29 +5652,37 @@ set_config_with_handle(const char *name, config_handle *handle,
 					record->status &= ~GUC_PENDING_RESTART;
 					return -1;
 				}
+				elog(WARNING, "i am alive 5636\n");
 				if (changeVal)
 				{
+					elog(WARNING, "i am alive 5639\n");
 					/* Save old value to support transaction abort */
 					if (!makeDefault)
 						push_old_value(&conf->gen, action);
-
+						elog(WARNING, "i am alive 5643\n");
 					if (conf->assign_hook)
 						conf->assign_hook(newval, newextra);
+						elog(WARNING, "i am alive 5646\n");
 					set_struct_field(conf, &conf->variable, newval, true);
+					elog(WARNING, "i am alive 5648 %s\n", struct_to_str(conf->variable, conf->type));
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									newextra);
+					elog(WARNING, "i am alive 5651\n");
 					set_guc_source(&conf->gen, source);
+					elog(WARNING, "i am alive 5653\n");
 					conf->gen.scontext = context;
+					elog(WARNING, "i am alive 5655\n");
 					conf->gen.srole = srole;
 				}
-
-				if (makeDefault)
+				elog(WARNING, "i am alive 5673\n");
+				/*if (makeDefault)
 				{
 					GucStack   *stack;
 
 					if (conf->gen.reset_source <= source)
 					{
 						set_struct_field(conf, &conf->reset_val, newval, false);
+						elog(WARNING, "i am alive 5681 %s\n", struct_to_str(conf->reset_val, conf->type) );
 						set_extra_field(&conf->gen, &conf->reset_extra,
 										newextra);
 						conf->gen.reset_source = source;
@@ -5672,7 +5702,8 @@ set_config_with_handle(const char *name, config_handle *handle,
 							stack->srole = srole;
 						}
 					}
-				}
+				}*/
+				elog(WARNING, "i am alive 5702 %s\n", struct_to_str(conf->reset_val, conf->type) );
 				/* Perhaps we didn't install newvaln anywhere */
 				if (newval && !struct_field_used(conf, newval)) {
 					free_struct(newval, conf->type);
@@ -5680,7 +5711,8 @@ set_config_with_handle(const char *name, config_handle *handle,
 				/* Perhaps we didn't install newextra anywhere */
 				if (newextra && !extra_field_used(&conf->gen, newextra))
 					guc_free(newextra);
-				break;
+				elog(WARNING, "i am alive 5688\n");
+					break;
 #undef newval
 			}
 	}

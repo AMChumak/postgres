@@ -576,9 +576,10 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <ival>	Iconst SignedIconst
 %type <str>		Sconst comment_text notify_payload
-%type <str>		RoleId opt_boolean_or_string
+%type <str>		RoleId opt_boolean_or_string opt_boolean_or_string_extended
 %type <list>	var_list
 %type <str>		ColId ColLabel BareColLabel IndexCh
+%type <str>     struct_only struct_array_expr struct_struct_expr list_item
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
 %type <str>		var_name type_function_name param_name
 %type <str>		createdb_opt_name plassign_target
@@ -1827,13 +1828,49 @@ var_value:	opt_boolean_or_string
 				{ $$ = makeStringConst($1, @1); }
 			| NumericOnly
 				{ $$ = makeAConst($1, @1); }
+			| struct_only
+				{ $$ = makeStringConst($1, @1); }
 		;
+
+struct_only:
+		'{' struct_struct_expr '}'                                  { $$ = psprintf("{%s}", $2); }
+		| '[' struct_array_expr ']'                                 { $$ = psprintf("[%s]", $2); }
+		;
+
+struct_array_expr:
+		|struct_array_expr ',' list_item                                              { $$ = psprintf("%s,%s", $1, $3);}
+		| list_item                                                                   {$$ = psprintf("%s", $1);};
+
+struct_struct_expr:
+		|struct_struct_expr ',' list_item                                             { $$ = psprintf("%s,%s", $1, $3); }
+		| list_item                                                                   {$$ = psprintf("%s", $1);};
+
+
+
+list_item:
+		ICONST                                                                        { $$ = psprintf("%d", $1);}
+		| FCONST                                                                      { $$ = psprintf("%s", $1);}
+		| opt_boolean_or_string_extended                                              { $$ = psprintf("%s", $1); }
+		| struct_only                                                                 { $$ = psprintf("%s", $1); };
 
 iso_level:	READ UNCOMMITTED						{ $$ = "read uncommitted"; }
 			| READ COMMITTED						{ $$ = "read committed"; }
 			| REPEATABLE READ						{ $$ = "repeatable read"; }
 			| SERIALIZABLE							{ $$ = "serializable"; }
 		;
+
+opt_boolean_or_string_extended:
+			TRUE_P									{ $$ = "true"; }
+			| FALSE_P								{ $$ = "false"; }
+			| ON									{ $$ = "on"; }
+			/*
+			 * OFF is also accepted as a boolean value, but is handled by
+			 * the NonReservedWord rule.  The action for booleans and strings
+			 * is the same, so we don't need to distinguish them here.
+			 */
+			| NonReservedWord_or_Sconst				{ $$ = psprintf("'%s'", $1); }
+		;
+
 
 opt_boolean_or_string:
 			TRUE_P									{ $$ = "true"; }
