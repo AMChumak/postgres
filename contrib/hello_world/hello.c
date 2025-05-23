@@ -38,14 +38,6 @@ static bool hello_logs = true;
 
 
 
-struct node {
-    char *name;
-    int state;
-};
-
-struct node my_node = {NULL, 42};
-struct node my_boot_node = {NULL, 42};
-
 
 
 
@@ -84,9 +76,17 @@ Datum get_logs_count(PG_FUNCTION_ARGS) {
 }
 
 
+struct node {
+    char *name;
+    int state;
+};
+
+struct node my_node;
+struct node my_boot_node = {"supernova", 42};
+
+
+
 void _PG_init(void) {
-
-
 
 
     const char *node_typename = "node";

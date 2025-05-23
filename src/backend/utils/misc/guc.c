@@ -32,6 +32,7 @@
 #include <math.h>
 #include <sys/stat.h>
 #include <sys/ucontext.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "access/xact.h"
@@ -300,6 +301,7 @@ void free_struct_strs(void *delptr, const char *type);
 void free_struct(void *delptr, const char *type);
 void DefineCustomStructType(const char *type, const char *signature);
 char *get_nest_field_type(const char * struct_type, const char *field_path);
+int get_nest_field_offset(const char *struct_type, const char *field_path);
 #define CNT_SIMPLE_TYPES 5
 
 
@@ -800,21 +802,14 @@ struct_field_used(struct config_struct *conf, void *structval)
 static void
 set_struct_field(struct config_struct *conf, void **field, void *newval, bool is_variable)
 {
-	elog(WARNING, "i am alive 802\n");
 	void	   *oldval = *field;
-	elog(WARNING, "i am alive 805\n");
 	/* Do the assignment */
 	if (is_variable){
-		elog(WARNING, "i am alive 807\n");
 		free_struct_strs(*field, conf->type);
-		elog(WARNING, "i am alive 809 %s\n", conf->type);
-		elog (WARNING,"alive 810 %s\n:", struct_to_str(newval, conf->type));
 		struct_dup_impl(*field, newval, conf->type);
-		elog(WARNING, "i am alive 811 %s\n", struct_to_str(*field, conf->type));
 	}
 	else{
 		*field = struct_dup(newval, conf->type);
-		//elog(WARNING, "i am alive 817 %s\n", struct_to_str(*field, conf->type));
 	}
 
 	/* Free old value if it's not NULL and isn't referenced anymore */
@@ -1460,6 +1455,11 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 		guc_free(struct_name);
 
 		if (hentry) {
+			// check if string -> that is placeholder, return hentry->gucvar;
+			if (hentry->gucvar->vartype == PGC_STRING) {
+				return hentry->gucvar;
+			}
+
 			if (*deref_ptr == '[')
 				start_path = deref_ptr;
 			else {
@@ -1496,7 +1496,6 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 				struct_name[deref_ptr - name] = 0;
 				struct config_generic *result = add_placeholder_variable(struct_name, elevel);
 				guc_free(struct_name);
-				elog(WARNING, "go out 1507\n");
 				return result;
 			}
 			return add_placeholder_variable(name, elevel);
@@ -3552,7 +3551,6 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 				end_ptr = c;
 				const char *field_type = type_def->fields[pos].type;
 				int offset = get_field_offset(type, type_def->fields[pos].name);
-				elog(WARNING, "offset of field %s is %d",type_def->fields[pos].name,offset);
 				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + offset, flags, hintmsg);
 				st_ptr = end_ptr+1;
 				pos++;
@@ -3568,7 +3566,6 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 				end_ptr = c;
 				const char *field_type = type_def->fields[pos].type;
 				int offset = get_field_offset(type, type_def->fields[pos].name);
-				elog(WARNING, "offset of field %s is %d",type_def->fields[pos].name,offset);
 				bool check = parse_struct_impl(st_ptr, field_type, (char*)result + offset, flags, hintmsg);
 				pos++;
 				if (!check)
@@ -3625,13 +3622,120 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 		*c = 0;
 		char *newval = guc_malloc(ERROR, (c - st_ptr + 1) * sizeof(char));
 		sprintf(newval, "%s", st_ptr);
-		elog(WARNING,"3625 string is %s", newval);
 		*((char **)result) = newval;
 		return true;
 	}
 	//todo hint
 	return false;
 }
+
+
+//Functions examine string and decides that is recovery of placeholder (assignment list) or structure definition
+//assignemt list has signature: <path>=<value>;...;<path>=<value>;
+
+//maybe we should use signature: ;<path>=<value>;...;<path>=<value> when we will check first simbol, but this form is unusual
+bool is_assignment_list(const char *value) {
+	return ';' == value[strlen(value) - 1];
+}
+
+
+char *get_next_delimeter(char *old_delimeter, char delimeter) {
+	bool in_str = false;
+	char *next = old_delimeter + 1;
+
+	while (*next) {
+		if (*next == '\'' && *(next-1) ) {
+			in_str ^= 1;
+		}
+
+		if (*next == delimeter) {
+			return next;
+		}
+
+		next++;
+	}
+
+	return next;
+}
+
+
+
+
+
+//Function parses assignment list in the way:
+//1) slpit assignement by ;
+//2) split path and value in each assignment by =
+//3) getting offset and type by path
+//4) assign value with parse_struct_impl
+bool parse_assignment_list(char *value, const char *type, void *result, int flags, const char **hintmsg) {
+	char *cur_assignment = value;
+	while(*(cur_assignment)) { //assignment list ended by ;
+		bool check;
+		char *path = NULL;
+		char *part_value = NULL;
+		char *part_type = NULL;
+
+		char *eq = get_next_delimeter(cur_assignment, '=');
+		char *next_assignment = get_next_delimeter(cur_assignment, ';');
+
+		if (eq > next_assignment) {
+
+			//there is no path, only value for all structure
+			part_value = guc_malloc(ERROR, (next_assignment - cur_assignment) * sizeof(char));
+			strncpy(part_value, cur_assignment, next_assignment - cur_assignment);
+			part_value[next_assignment - cur_assignment] = 0;
+
+			check = parse_struct_impl(part_value,type,(char *)result, flags, hintmsg);
+
+		} else {
+
+			//path - part before =
+			path = guc_malloc(ERROR, (eq-cur_assignment + 1)*sizeof(char));
+			strncpy(path, cur_assignment, eq-cur_assignment);
+			path[eq - cur_assignment] = 0;
+
+			//value - part after =
+			part_value = guc_malloc(ERROR, (next_assignment - eq) * sizeof(char));
+			strncpy(part_value, eq + 1, next_assignment - eq);
+			part_value[next_assignment - (eq + 1)] = 0;
+
+			//getting type and offset of field by path
+			part_type = get_nest_field_type(type, path);
+			int part_offset = get_nest_field_offset(type,path);
+
+			if (!strcmp(part_type,"string")) {
+				//todo it so awful, that we cannot add embedded quotations while serialize struct part in string.
+				//therefore we should it do now
+				int part_value_len = strlen(part_value);
+				char *embedded_part_value = guc_malloc(ERROR, sizeof(char) * part_value_len + 3);
+				embedded_part_value[0] = '\'';
+				strcpy(embedded_part_value + 1, part_value);
+				embedded_part_value[part_value_len + 1] = '\'';
+				embedded_part_value[part_value_len + 2] = 0;
+				guc_free(part_value);
+				part_value = embedded_part_value;
+			}
+			elog(WARNING, "in path: %s parse struct part value: %s\n", path, part_value);
+
+			check = parse_struct_impl(part_value,part_type,(char *)result + part_offset, flags, hintmsg);
+			elog(WARNING, "succes parsing in 3722\n");
+		}
+
+		if (!check) {
+			return false;
+		}
+
+		guc_free(path);
+		guc_free(part_value);
+		guc_free(part_type);
+
+		cur_assignment = next_assignment + 1;
+	}
+
+	return true;
+}
+
+
 
 /*
  * Try to parse value as a struct.  The accepted formats are the
@@ -3646,9 +3750,17 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
  bool
  parse_struct(const char *value, const char *type, void **result, int flags, const char **hintmsg)
  {
+	elog(WARNING,"parse struct in 3797: %s\n",value);
 	char *scheme = guc_strdup(ERROR, value);
 	void *val = guc_malloc(ERROR, get_type_memory_size(type) * sizeof(char));
-	bool check = parse_struct_impl(scheme, type, val,flags,hintmsg);
+
+	bool check;
+	if (is_assignment_list(value)) {
+		check = parse_assignment_list(scheme, type, val, flags, hintmsg);
+	} else {
+		check = parse_struct_impl(scheme, type, val,flags,hintmsg);
+	}
+
 	if (check)
 		*result = val;
 	else {
@@ -4123,9 +4235,7 @@ char *struct_to_str(const void *structp, const char *type) {
 	char **parts = (char **)guc_malloc(ERROR, struct_type->cnt_fields * sizeof(char *));
 	int total_size = 3;
 	for (int i = 0; i < struct_type->cnt_fields; i++) {
-		elog(WARNING, "%d: %s %s", i, struct_type->fields[i].type, struct_type->fields[i].name);
 		parts[i] = struct_to_str((char *)structp + get_field_offset(struct_type->type, struct_type->fields[i].name), struct_type->fields[i].type);
-		elog(WARNING, "%s",parts[i]);
 		total_size += strlen(parts[i]) + 2;
 	}
 	char *glue_struct = (char *)guc_malloc(ERROR, total_size * sizeof(char));
@@ -4142,7 +4252,6 @@ char *struct_to_str(const void *structp, const char *type) {
 	glue_struct[total_size-1] = 0;
 	guc_free(parts[struct_type->cnt_fields - 1]);
 	guc_free(parts);
-	elog(WARNING, "%s",glue_struct);
 	return glue_struct;
 }
 
@@ -4205,12 +4314,10 @@ void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type
 
 	if (struct_type->cnt_fields == 0) { //atomic type case like int, real etc
 		if (!strcmp(type,"string")) { // string is unique case when we create duplicate
-			elog(WARNING, "start copy string %s\n", *(char **)src_struct);
 			if (*(char **)src_struct)
 				*(char **)dest_struct = guc_strdup(ERROR, *(char **)src_struct);
 			else
 				*(char **)dest_struct = NULL;
-			elog(WARNING, "end_copy\n");
 			return;
 		}
 		memcpy(dest_struct, src_struct, struct_type->type_size);
@@ -4220,7 +4327,6 @@ void struct_dup_impl(void *dest_struct, const void *src_struct, const char *type
 
 	for (int i = 0; i < struct_type->cnt_fields; i++) {
 		int field_offset = get_field_offset(type, struct_type->fields[i].name);
-		elog(WARNING, "field %d offset is %d\n",i, field_offset);
 		struct_dup_impl((char *)dest_struct + field_offset, (char *)src_struct + field_offset, struct_type->fields[i].type);
 	}
 }
@@ -4521,7 +4627,6 @@ parse_and_validate_value(struct config_generic *record,
 			break;
 		case PGC_STRUCT:
 			{
-				elog(WARNING, "hello from parsing structure 4517\n");
 				struct config_struct *conf = (struct config_stuct *) record;
 				const char *hintmsg;
 				if (!parse_struct(value, conf->type, &newval->structval,
@@ -4534,7 +4639,6 @@ parse_and_validate_value(struct config_generic *record,
 							hintmsg ? errhint("%s", _(hintmsg)) : 0));
 					return false;
 				}
-				elog(WARNING, "result 4530 is %s\n", struct_to_str(newval->structval, conf->type));
 
 				if (!call_struct_check_hook(conf, newval->structval, newextra,
 					source, elevel))
@@ -5257,12 +5361,77 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 #define newval (newval_union.stringval)
 
+
 				if (value)
 				{
-					if (!parse_and_validate_value(record, value,
-												  source, elevel,
-												  &newval_union, &newextra))
-						return 0;
+					//todo: if option is pHolder, then we should edit it value if field and replace if whole struct
+
+					//check that field or struct
+					bool is_field = false;
+					char *start_path = NULL;
+					char *start_path_m = strchr(name, '-');
+					char *start_path_b = strchr(name,'[');
+
+					if (name && ( start_path_m || start_path_b)){
+
+						if (((start_path_b < start_path_m) && start_path_b) || !start_path_m) { //take first dereference
+							start_path = start_path_b;
+						} else {
+							start_path = start_path_m;
+						}
+						is_field = true;
+					}
+
+
+					if (is_field) {
+						elog(WARNING,"start making pHolder %p\n", *(conf->variable));
+						//write new assignment into right side of current value
+
+						char *old_value = *(conf->variable);
+
+						if (!old_value) {
+							old_value = "";
+						}
+
+						int val_len = strlen(old_value) + strlen(start_path) + 1 + strlen(value) + 2;
+
+						if (strlen(old_value) > 0 && old_value[strlen(old_value)-1] != ';') {
+							//if first assignment was a total structure value, when it has no ; at the end
+							val_len +=1;
+						}
+						elog(WARNING,"counted len in 5384\n");
+						char *new_val = guc_malloc(ERROR, sizeof(char) * val_len);
+						new_val[0] = 0;
+
+						strcat(new_val, old_value);
+
+						if (strlen(old_value) > 0 && old_value[strlen(old_value)-1] != ';') {
+							strcat(new_val, ";");
+						}
+						elog(WARNING,"added ; in 5393\n");
+
+						strcat(strcat(strcat(strcat(new_val,start_path),"="),value),";");
+						new_val[val_len] = 0;
+
+						elog(WARNING,"pHolder in 5396: %s\n",new_val);
+
+						if (!parse_and_validate_value(record, new_val,
+							source, elevel,
+							&newval_union, &newextra)){
+								guc_free(new_val);
+								return 0;
+							}
+
+						guc_free(new_val);
+
+					} else {
+
+						if (!parse_and_validate_value(record, value,
+							source, elevel,
+							&newval_union, &newextra))
+  							return 0;
+
+					}
 				}
 				else if (source == PGC_S_DEFAULT)
 				{
@@ -5517,7 +5686,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 			}
 		case PGC_STRUCT:
 			{
-				elog(LOG, "Hello %s %s\n", name, value);
 				struct config_struct *conf = (struct config_struct *) record;
 				bool is_field = false;
 				/*check that field or whole structure by name*/
@@ -5542,7 +5710,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 #define newval (newval_union.structval)
 				if (value)
 				{
-					elog(WARNING,"I am from value 5538\n");
 					char *str_val = value;
 					void *tmp_record = NULL; //there is snapshot of modified structure will be saved
 					if (is_field){
@@ -5563,7 +5730,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 						}
 
 						bool check = parse_struct_impl(embedded_str, type, (char *)tmp_record + offset, 0, hintmsgs);
-						char *test2 = struct_to_str(tmp_record, conf->type);
 						if (!strcmp(type, "string")) {
 							guc_free(embedded_str);
 						}
@@ -5616,7 +5782,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 					* struct_dup not needed, since reset_val is already under
 					* guc.c's control
 					*/
-					elog(WARNING,"I am from reset\n");
 					newval = conf->reset_val;
 					newextra = conf->reset_extra;
 					source = conf->gen.reset_source;
@@ -5652,29 +5817,21 @@ set_config_with_handle(const char *name, config_handle *handle,
 					record->status &= ~GUC_PENDING_RESTART;
 					return -1;
 				}
-				elog(WARNING, "i am alive 5636\n");
+
 				if (changeVal)
 				{
-					elog(WARNING, "i am alive 5639\n");
 					/* Save old value to support transaction abort */
 					if (!makeDefault)
 						push_old_value(&conf->gen, action);
-						elog(WARNING, "i am alive 5643\n");
 					if (conf->assign_hook)
 						conf->assign_hook(newval, newextra);
-						elog(WARNING, "i am alive 5646\n");
 					set_struct_field(conf, &conf->variable, newval, true);
-					elog(WARNING, "i am alive 5648 %s\n", struct_to_str(conf->variable, conf->type));
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									newextra);
-					elog(WARNING, "i am alive 5651\n");
 					set_guc_source(&conf->gen, source);
-					elog(WARNING, "i am alive 5653\n");
 					conf->gen.scontext = context;
-					elog(WARNING, "i am alive 5655\n");
 					conf->gen.srole = srole;
 				}
-				elog(WARNING, "i am alive 5673\n");
 				/*if (makeDefault)
 				{
 					GucStack   *stack;
@@ -5702,8 +5859,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 							stack->srole = srole;
 						}
 					}
-				}*/
-				elog(WARNING, "i am alive 5702 %s\n", struct_to_str(conf->reset_val, conf->type) );
+				}*/  // TODO fix  bug with reset values
 				/* Perhaps we didn't install newvaln anywhere */
 				if (newval && !struct_field_used(conf, newval)) {
 					free_struct(newval, conf->type);
@@ -5711,7 +5867,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 				/* Perhaps we didn't install newextra anywhere */
 				if (newextra && !extra_field_used(&conf->gen, newextra))
 					guc_free(newextra);
-				elog(WARNING, "i am alive 5688\n");
 					break;
 #undef newval
 			}
