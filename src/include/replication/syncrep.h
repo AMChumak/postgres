@@ -80,6 +80,17 @@ extern PGDLLIMPORT char *syncrep_parse_error_msg;
 /* user-settable parameters for synchronous replication */
 extern PGDLLIMPORT char *SyncRepStandbyNames;
 
+
+struct SSNDescription  {
+	char *mode;
+	int count;
+	char *names[100];
+};
+
+extern PGDLLIMPORT struct SSNDescription SuperDuperSyncStandbyNames;
+extern PGDLLIMPORT struct SSNDescription SuperDuperSyncStandbyNamesBoot;
+
+
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
 

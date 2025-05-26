@@ -1,0 +1,5 @@
+# BiHA extension
+comment='New abilities for exploration pg!'
+default_version = '1.0'
+module_pathname = '$libdir/BiHA'
+relocatable = true

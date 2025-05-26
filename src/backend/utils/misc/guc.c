@@ -3715,10 +3715,8 @@ bool parse_assignment_list(char *value, const char *type, void *result, int flag
 				guc_free(part_value);
 				part_value = embedded_part_value;
 			}
-			elog(WARNING, "in path: %s parse struct part value: %s\n", path, part_value);
 
 			check = parse_struct_impl(part_value,part_type,(char *)result + part_offset, flags, hintmsg);
-			elog(WARNING, "succes parsing in 3722\n");
 		}
 
 		if (!check) {
@@ -3750,7 +3748,6 @@ bool parse_assignment_list(char *value, const char *type, void *result, int flag
  bool
  parse_struct(const char *value, const char *type, void **result, int flags, const char **hintmsg)
  {
-	elog(WARNING,"parse struct in 3797: %s\n",value);
 	char *scheme = guc_strdup(ERROR, value);
 	void *val = guc_malloc(ERROR, get_type_memory_size(type) * sizeof(char));
 
@@ -5364,7 +5361,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					//todo: if option is pHolder, then we should edit it value if field and replace if whole struct
 
 					//check that field or struct
 					bool is_field = false;
@@ -5384,7 +5380,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 
 					if (is_field) {
-						elog(WARNING,"start making pHolder %p\n", *(conf->variable));
 						//write new assignment into right side of current value
 
 						char *old_value = *(conf->variable);
@@ -5399,7 +5394,6 @@ set_config_with_handle(const char *name, config_handle *handle,
 							//if first assignment was a total structure value, when it has no ; at the end
 							val_len +=1;
 						}
-						elog(WARNING,"counted len in 5384\n");
 						char *new_val = guc_malloc(ERROR, sizeof(char) * val_len);
 						new_val[0] = 0;
 
@@ -5408,12 +5402,11 @@ set_config_with_handle(const char *name, config_handle *handle,
 						if (strlen(old_value) > 0 && old_value[strlen(old_value)-1] != ';') {
 							strcat(new_val, ";");
 						}
-						elog(WARNING,"added ; in 5393\n");
+
 
 						strcat(strcat(strcat(strcat(new_val,start_path),"="),value),";");
 						new_val[val_len] = 0;
 
-						elog(WARNING,"pHolder in 5396: %s\n",new_val);
 
 						if (!parse_and_validate_value(record, new_val,
 							source, elevel,
@@ -5832,14 +5825,14 @@ set_config_with_handle(const char *name, config_handle *handle,
 					conf->gen.scontext = context;
 					conf->gen.srole = srole;
 				}
-				/*if (makeDefault)
+				//todo check that bug was fixed correctly
+				if (makeDefault)
 				{
 					GucStack   *stack;
 
 					if (conf->gen.reset_source <= source)
 					{
 						set_struct_field(conf, &conf->reset_val, newval, false);
-						elog(WARNING, "i am alive 5681 %s\n", struct_to_str(conf->reset_val, conf->type) );
 						set_extra_field(&conf->gen, &conf->reset_extra,
 										newextra);
 						conf->gen.reset_source = source;
@@ -5859,7 +5852,9 @@ set_config_with_handle(const char *name, config_handle *handle,
 							stack->srole = srole;
 						}
 					}
-				}*/  // TODO fix  bug with reset values
+				}
+
+
 				/* Perhaps we didn't install newvaln anywhere */
 				if (newval && !struct_field_used(conf, newval)) {
 					free_struct(newval, conf->type);

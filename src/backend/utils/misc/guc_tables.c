@@ -794,6 +794,10 @@ struct type_definition UserDefinedConfigureTypes[] = {
 		"wal_set",
 		"string set_name; wal_state[4] set"
 	},
+	{
+		"ssn_description",
+		"string mode; int count; string[100] names"
+	},
 	/* End-of-list marker */
 	{
 		NULL, NULL
@@ -5331,6 +5335,14 @@ struct config_struct ConfigureNamesStruct[] =
 		&wal_boot_buffer_sizes,
 		NULL, NULL, NULL, NULL, NULL, NULL
 
+	},
+	{{"super_duper_ssn", PGC_USERSET, REPLICATION_PRIMARY,
+		gettext_noop("Number of synchronous standbys and list of names of potential synchronous ones."),
+		NULL},
+		"ssn_description",
+		&SuperDuperSyncStandbyNames,
+		&SuperDuperSyncStandbyNamesBoot,
+		NULL, NULL, NULL, NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */

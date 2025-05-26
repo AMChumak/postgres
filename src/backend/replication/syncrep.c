@@ -89,6 +89,11 @@
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 
+
+
+struct SSNDescription SuperDuperSyncStandbyNames;
+struct SSNDescription SuperDuperSyncStandbyNamesBoot;
+
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
 
