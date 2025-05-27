@@ -3614,6 +3614,9 @@ bool parse_struct_impl(char *value, const char *type, void *result, int flags, c
 				return true;
 			}
 			return false;
+		} else if (!strcmp(c, "\'nil\'")){
+				*((char **)result) = NULL;
+				return true;
 		}
 		c++;
 		char *st_ptr = c;

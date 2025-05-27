@@ -86,7 +86,7 @@ struct node {
 struct cluster {
     char *name;
     int size;
-    struct node nodes[10];
+    struct node nodes[3];
 };
 
 
@@ -104,7 +104,7 @@ void _PG_init(void) {
 
 
     const char *cluster_typename = "BiHA.cluster";
-    const char *cluster_signature = "string name; int size; BiHA.node[10] nodes";
+    const char *cluster_signature = "string name; int size; BiHA.node[3] nodes";
 
     DefineCustomStructType(node_typename, node_signature);
     DefineCustomStructType(cluster_typename, cluster_signature);

@@ -796,7 +796,7 @@ struct type_definition UserDefinedConfigureTypes[] = {
 	},
 	{
 		"ssn_description",
-		"string mode; int count; string[100] names"
+		"string mode; int count; string[5] names"
 	},
 	/* End-of-list marker */
 	{

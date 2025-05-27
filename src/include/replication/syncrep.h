@@ -84,7 +84,7 @@ extern PGDLLIMPORT char *SyncRepStandbyNames;
 struct SSNDescription  {
 	char *mode;
 	int count;
-	char *names[100];
+	char *names[5];
 };
 
 extern PGDLLIMPORT struct SSNDescription SuperDuperSyncStandbyNames;
