@@ -1,0 +1,5 @@
+# pg_stdopt extension
+comment = 'Standard optimizer for PostgreSQL'
+default_version = '1.0.1'
+module_pathname = '$libdir/pg_stdopt'
+relocatable = true
