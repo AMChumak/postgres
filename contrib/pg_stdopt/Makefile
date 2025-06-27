@@ -6,7 +6,7 @@ MODULE_big = pg_stdopt
 
 OBJS = pg_stdopt.o
 
-DATA = pg_make_title--1.0.sql
+DATA = pg_stdopt--1.0.1.sql
 PG_CONFIG = pg_config
 
 MODULES = pg_stdopt
