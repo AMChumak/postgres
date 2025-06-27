@@ -44,4 +44,4 @@ lib*.pc
 /tmp_install/
 /portlock/
 
-/include/
+/install/
