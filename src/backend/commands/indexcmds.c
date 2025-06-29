@@ -592,6 +592,13 @@ DefineIndex(Oid tableId,
 	int			root_save_sec_context;
 	int			root_save_nestlevel;
 
+	if (!pull_varattnos_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (pull_varattnos_hook)")));
+		return address;
+	}
+
 	root_save_nestlevel = NewGUCNestLevel();
 
 	RestrictSearchPath();
@@ -1129,8 +1136,8 @@ DefineIndex(Oid tableId,
 	{
 		Bitmapset  *indexattrs = NULL;
 
-		pull_varattnos((Node *) indexInfo->ii_Expressions, 1, &indexattrs);
-		pull_varattnos((Node *) indexInfo->ii_Predicate, 1, &indexattrs);
+		pull_varattnos_hook((Node *) indexInfo->ii_Expressions, 1, &indexattrs);
+		pull_varattnos_hook((Node *) indexInfo->ii_Predicate, 1, &indexattrs);
 
 		for (int i = FirstLowInvalidHeapAttributeNumber + 1; i < 0; i++)
 		{

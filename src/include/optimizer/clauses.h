@@ -28,8 +28,12 @@ extern bool contain_agg_clause(Node *clause);
 extern bool contain_window_function(Node *clause);
 extern WindowFuncLists *find_window_functions(Node *clause, Index maxWinRef);
 
+typedef double (*expression_returns_set_rows_hook_type) (PlannerInfo *root, Node *clause);
+extern PGDLLIMPORT expression_returns_set_rows_hook_type expression_returns_set_rows_hook;
 extern double expression_returns_set_rows(PlannerInfo *root, Node *clause);
 
+typedef bool (*contain_subplans_hook_type) (Node *clause);
+extern PGDLLIMPORT contain_subplans_hook_type contain_subplans_hook;
 extern bool contain_subplans(Node *clause);
 
 extern char max_parallel_hazard(Query *parse);
@@ -43,9 +47,14 @@ extern List *find_nonnullable_vars(Node *clause);
 extern List *find_forced_null_vars(Node *node);
 extern Var *find_forced_null_var(Node *node);
 
+typedef bool (*is_pseudo_constant_clause_hook_type) (Node *clause);
+extern PGDLLIMPORT is_pseudo_constant_clause_hook_type is_pseudo_constant_clause_hook;
 extern bool is_pseudo_constant_clause(Node *clause);
+
 extern bool is_pseudo_constant_clause_relids(Node *clause, Relids relids);
 
+typedef int (*NumRelids_hook_type) (PlannerInfo *root, Node *clause);
+extern PGDLLIMPORT NumRelids_hook_type NumRelids_hook;
 extern int	NumRelids(PlannerInfo *root, Node *clause);
 
 extern void CommuteOpExpr(OpExpr *clause);

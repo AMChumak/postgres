@@ -5234,6 +5234,13 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 	ListCell   *l;
 	MemoryContext oldcxt;
 
+	if (!pull_varattnos_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (pull_varattnos_hook)")));
+		return NULL;
+	}
+
 	/* Quick exit if we already computed the result. */
 	if (relation->rd_attrsvalid)
 	{
@@ -5392,10 +5399,10 @@ restart:
 		}
 
 		/* Collect all attributes used in expressions, too */
-		pull_varattnos(indexExpressions, 1, attrs);
+		pull_varattnos_hook(indexExpressions, 1, attrs);
 
 		/* Collect all attributes in the index predicate, too */
-		pull_varattnos(indexPredicate, 1, attrs);
+		pull_varattnos_hook(indexPredicate, 1, attrs);
 
 		index_close(indexDesc, AccessShareLock);
 	}

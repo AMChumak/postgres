@@ -59,6 +59,13 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	ObjectAddress colobject,
 				defobject;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return 0;
+	}
+
 	adrel = table_open(AttrDefaultRelationId, RowExclusiveLock);
 
 	/*
@@ -117,13 +124,14 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 		Datum		missingval = (Datum) 0;
 		bool		missingIsNull = true;
 
+
 		valuesAtt[Anum_pg_attribute_atthasdef - 1] = true;
 		replacesAtt[Anum_pg_attribute_atthasdef - 1] = true;
 
 		if (rel->rd_rel->relkind == RELKIND_RELATION && add_column_mode &&
 			!attgenerated)
 		{
-			expr2 = expression_planner(expr2);
+			expr2 = expression_planner_hook(expr2);
 			estate = CreateExecutorState();
 			exprState = ExecPrepareExpr(expr2, estate);
 			econtext = GetPerTupleExprContext(estate);

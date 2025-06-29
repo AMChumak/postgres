@@ -1575,6 +1575,13 @@ statext_is_compatible_clause(PlannerInfo *root, Node *clause, Index relid,
 	int			clause_relid;
 	Oid			userid;
 
+	if (!pull_varattnos_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (pull_varattnos_hook)")));
+		return false;
+	}
+
 	/*
 	 * Special-case handling for bare BoolExpr AND clauses, because the
 	 * restrictinfo machinery doesn't build RestrictInfos on top of AND
@@ -1647,7 +1654,7 @@ statext_is_compatible_clause(PlannerInfo *root, Node *clause, Index relid,
 
 		/* Now merge attnums from *exprs into clause_attnums */
 		if (*exprs != NIL)
-			pull_varattnos((Node *) *exprs, relid, &clause_attnums);
+			pull_varattnos_hook((Node *) *exprs, relid, &clause_attnums);
 
 		attnum = -1;
 		while ((attnum = bms_next_member(clause_attnums, attnum)) >= 0)

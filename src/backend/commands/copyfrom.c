@@ -1412,6 +1412,13 @@ BeginCopyFrom(ParseState *pstate,
 		0
 	};
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return cstate;
+	}
+
 	/* Allocate workspace and zero all fields */
 	cstate = (CopyFromStateData *) palloc0(sizeof(CopyFromStateData));
 
@@ -1660,7 +1667,7 @@ BeginCopyFrom(ParseState *pstate,
 			if (defexpr != NULL)
 			{
 				/* Run the expression through planner */
-				defexpr = expression_planner(defexpr);
+				defexpr = expression_planner_hook(defexpr);
 
 				/* Initialize executable expression in copycontext */
 				defexprs[attnum - 1] = ExecInitExpr(defexpr, NULL);

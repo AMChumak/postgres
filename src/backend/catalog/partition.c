@@ -260,6 +260,13 @@ has_partition_attrs(Relation rel, Bitmapset *attnums, bool *used_in_expr)
 	ListCell   *partexprs_item;
 	int			i;
 
+	if (!pull_varattnos_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (pull_varattnos_hook)")));
+		return false;
+	}
+
 	if (attnums == NULL || rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		return false;
 
@@ -289,7 +296,7 @@ has_partition_attrs(Relation rel, Bitmapset *attnums, bool *used_in_expr)
 			Bitmapset  *expr_attrs = NULL;
 
 			/* Find all attributes referenced */
-			pull_varattnos(expr, 1, &expr_attrs);
+			pull_varattnos_hook(expr, 1, &expr_attrs);
 			partexprs_item = lnext(partexprs, partexprs_item);
 
 			if (bms_overlap(attnums, expr_attrs))

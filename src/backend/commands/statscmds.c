@@ -92,6 +92,13 @@ CreateStatistics(CreateStatsStmt *stmt)
 	ListCell   *cell;
 	ListCell   *cell2;
 
+	if (!pull_varattnos_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (pull_varattnos_hook)")));
+		return parentobject;
+	}
+
 	Assert(IsA(stmt, CreateStatsStmt));
 
 	/*
@@ -291,7 +298,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 			Assert(expr != NULL);
 
 			/* Disallow expressions referencing system attributes. */
-			pull_varattnos(expr, 1, &attnums);
+			pull_varattnos_hook(expr, 1, &attnums);
 
 			k = -1;
 			while ((k = bms_next_member(attnums, k)) >= 0)

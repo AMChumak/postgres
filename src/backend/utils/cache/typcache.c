@@ -1088,6 +1088,13 @@ load_domaintype_info(TypeCacheEntry *typentry)
 	Relation	conRel;
 	MemoryContext oldcxt;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return;
+	}
+
 	/*
 	 * If we're here, any existing constraint info is stale, so release it.
 	 * For safety, be sure to null the link before trying to delete the data.
@@ -1202,7 +1209,7 @@ load_domaintype_info(TypeCacheEntry *typentry)
 			 * CHECK constraints, it's not really clear that it's worth the
 			 * extra overhead to do that.
 			 */
-			check_expr = expression_planner(check_expr);
+			check_expr = expression_planner_hook(check_expr);
 
 			r = makeNode(DomainConstraintState);
 			r->constrainttype = DOM_CONSTRAINT_CHECK;

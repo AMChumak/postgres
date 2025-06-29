@@ -4565,6 +4565,13 @@ transformPartitionBoundValue(ParseState *pstate, Node *val,
 {
 	Node	   *value;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return NULL;
+	}
+
 	/* Transform raw parsetree */
 	value = transformExpr(pstate, val, EXPR_KIND_PARTITION_BOUND);
 
@@ -4602,7 +4609,7 @@ transformPartitionBoundValue(ParseState *pstate, Node *val,
 	if (!IsA(value, Const))
 	{
 		assign_expr_collations(pstate, value);
-		value = (Node *) expression_planner((Expr *) value);
+		value = (Node *) expression_planner_hook((Expr *) value);
 		value = (Node *) evaluate_expr((Expr *) value, colType, colTypmod,
 									   partCollation);
 		if (!IsA(value, Const))

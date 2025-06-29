@@ -1,7 +1,5 @@
-create function hello_cworld() returns text AS 'MODULE_PATHNAME', 'hello_cworld' LANGUAGE C;
-
-create function hello_world() returns text AS $$
+create function check_init() returns text AS $$
 BEGIN
-    RETURN 'Hello world';
+    RETURN 'Extension pg_stdopt for standard optimizer was included successfully!';
 END;
 $$ LANGUAGE plpgsql;

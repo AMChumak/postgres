@@ -2791,6 +2791,13 @@ find_simplified_clause(PlannerInfo *root, Expr *rangeExpr, Expr *elemExpr)
 	RangeBound	upper;
 	bool		empty;
 
+	if (!contain_subplans_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (contain_subplans_hook) ")));
+		return NULL;
+	}
+
 	/* can't do anything unless the range is a non-null constant */
 	if (!IsA(rangeExpr, Const) || ((Const *) rangeExpr)->constisnull)
 		return NULL;
@@ -2841,8 +2848,9 @@ find_simplified_clause(PlannerInfo *root, Expr *rangeExpr, Expr *elemExpr)
 			 * explicitly, since cost_qual_eval() will barf on unplanned
 			 * subselects.
 			 */
-			if (contain_subplans((Node *) elemExpr))
+			if (contain_subplans_hook((Node *) elemExpr))
 				return NULL;
+
 			cost_qual_eval_node(&eval_cost, (Node *) elemExpr, root);
 			if (eval_cost.startup + eval_cost.per_tuple >
 				10 * cpu_operator_cost)

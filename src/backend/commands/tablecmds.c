@@ -7364,6 +7364,12 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 */
 	if (RELKIND_HAS_STORAGE(relkind))
 	{
+		if (!expression_planner_hook)
+		{
+			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+				errmsg("planner have not implemented (expression_planner_hook)")));
+			return address;
+		}
 		/*
 		 * For an identity column, we can't use build_column_default(),
 		 * because the sequence ownership isn't set yet.  So do it manually.
@@ -7411,7 +7417,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 			newval = (NewColumnValue *) palloc0(sizeof(NewColumnValue));
 			newval->attnum = attribute->attnum;
-			newval->expr = expression_planner(defval);
+			newval->expr = expression_planner_hook(defval);
 			newval->is_generated = (colDef->generated != '\0');
 
 			tab->newvals = lappend(tab->newvals, newval);
@@ -8416,6 +8422,13 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 	NewColumnValue *newval;
 	RawColumnDefault *rawEnt;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return address;
+	}
+
 	tuple = SearchSysCacheAttName(RelationGetRelid(rel), colName);
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
@@ -8496,7 +8509,7 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 
 	newval = (NewColumnValue *) palloc0(sizeof(NewColumnValue));
 	newval->attnum = attnum;
-	newval->expr = expression_planner(defval);
+	newval->expr = expression_planner_hook(defval);
 	newval->is_generated = true;
 
 	tab->newvals = lappend(tab->newvals, newval);
@@ -13350,6 +13363,13 @@ ATPrepAlterColumnType(List **wqueue,
 	AclResult	aclresult;
 	bool		is_expr;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return;
+	}
+
 	if (rel->rd_rel->reloftype && !recursing)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -13470,7 +13490,7 @@ ATPrepAlterColumnType(List **wqueue,
 		assign_expr_collations(pstate, transform);
 
 		/* Plan the expr now so we can accurately assess the need to rewrite. */
-		transform = (Node *) expression_planner((Expr *) transform);
+		transform = (Node *) expression_planner_hook((Expr *) transform);
 
 		/*
 		 * Add a work queue item to make ATRewriteTable update the column
@@ -18700,6 +18720,13 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 	ListCell   *lc;
 	Oid			am_oid;
 
+	if (!pull_varattnos_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (pull_varattnos_hook)")));
+		return;
+	}
+
 	attn = 0;
 	foreach(lc, partParams)
 	{
@@ -18803,7 +18830,7 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 				 * make partition routing impossible: their values won't be
 				 * known yet when we need to do that.
 				 */
-				pull_varattnos(expr, 1, &expr_attrs);
+				pull_varattnos_hook(expr, 1, &expr_attrs);
 				for (i = FirstLowInvalidHeapAttributeNumber; i < 0; i++)
 				{
 					if (bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
@@ -18846,7 +18873,7 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 				 * expression_planner won't scribble on its input, so this
 				 * won't affect the partexprs entry we saved above.
 				 */
-				expr = (Node *) expression_planner((Expr *) expr);
+				expr = (Node *) expression_planner_hook((Expr *) expr);
 
 				/*
 				 * Partition expressions cannot contain mutable functions,

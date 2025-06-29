@@ -767,9 +767,16 @@ ExecPrepareExpr(Expr *node, EState *estate)
 	ExprState  *result;
 	MemoryContext oldcontext;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return NULL;
+	}
+
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-	node = expression_planner(node);
+	node = expression_planner_hook(node);
 
 	result = ExecInitExpr(node, NULL);
 
@@ -795,9 +802,16 @@ ExecPrepareQual(List *qual, EState *estate)
 	ExprState  *result;
 	MemoryContext oldcontext;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return NULL;
+	}
+
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-	qual = (List *) expression_planner((Expr *) qual);
+	qual = (List *) expression_planner_hook((Expr *) qual);
 
 	result = ExecInitQual(qual, NULL);
 
@@ -818,9 +832,16 @@ ExecPrepareCheck(List *qual, EState *estate)
 	ExprState  *result;
 	MemoryContext oldcontext;
 
+	if (!expression_planner_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_hook)")));
+		return NULL;
+	}
+
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-	qual = (List *) expression_planner((Expr *) qual);
+	qual = (List *) expression_planner_hook((Expr *) qual);
 
 	result = ExecInitCheck(qual, NULL);
 

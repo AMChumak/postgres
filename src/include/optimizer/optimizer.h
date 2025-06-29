@@ -117,7 +117,14 @@ extern struct PlannedStmt *planner(Query *parse, const char *query_string,
 								   int cursorOptions,
 								   struct ParamListInfoData *boundParams);
 
+typedef Expr *(*expression_planner_hook_type) (Expr *expr);
+extern PGDLLIMPORT expression_planner_hook_type expression_planner_hook;
 extern Expr *expression_planner(Expr *expr);
+
+typedef Expr *(*expression_planner_with_deps_hook_type) (Expr *expr,
+										  List **relationOids,
+										  List **invalItems);
+extern PGDLLIMPORT expression_planner_with_deps_hook_type expression_planner_with_deps_hook;
 extern Expr *expression_planner_with_deps(Expr *expr,
 										  List **relationOids,
 										  List **invalItems);
@@ -195,10 +202,18 @@ extern SortGroupClause *get_sortgroupref_clause_noerr(Index sortref,
 
 extern Bitmapset *pull_varnos(PlannerInfo *root, Node *node);
 extern Bitmapset *pull_varnos_of_level(PlannerInfo *root, Node *node, int levelsup);
+
+typedef void(*pull_varattnos_hook_type) (Node *node, Index varno, Bitmapset **varattnos);
+extern PGDLLIMPORT pull_varattnos_hook_type pull_varattnos_hook;
 extern void pull_varattnos(Node *node, Index varno, Bitmapset **varattnos);
+
 extern List *pull_vars_of_level(Node *node, int levelsup);
 extern bool contain_var_clause(Node *node);
+
+typedef bool(*contain_vars_of_level_hook_type) (Node *node, int levelsup);
+extern PGDLLIMPORT contain_vars_of_level_hook_type contain_vars_of_level_hook;
 extern bool contain_vars_of_level(Node *node, int levelsup);
+
 extern bool contain_vars_returning_old_or_new(Node *node);
 extern int	locate_var_of_level(Node *node, int levelsup);
 extern List *pull_var_clause(Node *node, int flags);

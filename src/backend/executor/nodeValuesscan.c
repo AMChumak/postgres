@@ -215,6 +215,13 @@ ExecInitValuesScan(ValuesScan *node, EState *estate, int eflags)
 	int			i;
 	PlanState  *planstate;
 
+	if (!contain_subplans_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented")));
+		return NULL;
+	}
+
 	/*
 	 * ValuesScan should not have any children.
 	 */
@@ -293,7 +300,7 @@ ExecInitValuesScan(ValuesScan *node, EState *estate, int eflags)
 		 * case where there are no SubPlans anywhere.
 		 */
 		if (estate->es_subplanstates &&
-			contain_subplans((Node *) exprs))
+			contain_subplans_hook((Node *) exprs))
 		{
 			int			saved_jit_flags;
 

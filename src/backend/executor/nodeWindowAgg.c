@@ -2834,6 +2834,13 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 	int			i;
 	ListCell   *lc;
 
+	if (!contain_subplans_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (contain_subplans_hook) ")));
+		return NULL;
+	}
+
 	numArguments = list_length(wfunc->args);
 
 	i = 0;
@@ -2875,7 +2882,7 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 		use_ma_code = false;	/* non-moving frame head */
 	else if (contain_volatile_functions((Node *) wfunc))
 		use_ma_code = false;	/* avoid possible behavioral change */
-	else if (contain_subplans((Node *) wfunc))
+	else if (contain_subplans_hook((Node *) wfunc))
 		use_ma_code = false;	/* subplans might contain volatile functions */
 	else
 		use_ma_code = true;		/* yes, let's use it */

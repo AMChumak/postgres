@@ -1682,12 +1682,19 @@ GetCachedExpression(Node *expr)
 	MemoryContext cexpr_context;
 	MemoryContext oldcxt;
 
+	if (!expression_planner_with_deps_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (expression_planner_with_deps_hook)")));
+		return NULL;
+	}
+
 	/*
 	 * Pass the expression through the planner, and collect dependencies.
 	 * Everything built here is leaked in the caller's context; that's
 	 * intentional to minimize the size of the permanent data structure.
 	 */
-	expr = (Node *) expression_planner_with_deps((Expr *) expr,
+	expr = (Node *) expression_planner_with_deps_hook((Expr *) expr,
 												 &relationOids,
 												 &invalItems);
 

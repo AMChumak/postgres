@@ -2213,6 +2213,13 @@ rowcomparesel(PlannerInfo *root,
 	List	   *opargs;
 	bool		is_join_clause;
 
+	if (!NumRelids_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (NumRelids_hook)")));
+		return 0.0;
+	}
+
 	/* Build equivalent arg list for single operator */
 	opargs = list_make2(linitial(clause->largs), linitial(clause->rargs));
 
@@ -2242,7 +2249,7 @@ rowcomparesel(PlannerInfo *root,
 		/*
 		 * Otherwise, it's a join if there's more than one base relation used.
 		 */
-		is_join_clause = (NumRelids(root, (Node *) opargs) > 1);
+		is_join_clause = (NumRelids_hook(root, (Node *) opargs) > 1);
 	}
 
 	if (is_join_clause)
@@ -3436,6 +3443,12 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 	ListCell   *l;
 	int			i;
 
+	if (!expression_returns_set_rows_hook) {
+		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("relation cannot be null (expression_returns_set_rows_hook) ")));
+		return 0.0;
+	}
+
 	/* Zero the estinfo output parameter, if non-NULL */
 	if (estinfo != NULL)
 		memset(estinfo, 0, sizeof(EstimationInfo));
@@ -3489,7 +3502,8 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		 * pointless to worry too much about this without much better
 		 * estimates for SRF output rowcounts than we have today.)
 		 */
-		this_srf_multiplier = expression_returns_set_rows(root, groupexpr);
+		this_srf_multiplier = expression_returns_set_rows_hook(root, groupexpr);
+
 		if (srf_multiplier < this_srf_multiplier)
 			srf_multiplier = this_srf_multiplier;
 

@@ -415,6 +415,13 @@ ExecInitStoredGenerated(ResultRelInfo *resultRelInfo,
 	Bitmapset  *updatedCols;
 	MemoryContext oldContext;
 
+	if (!pull_varattnos_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (pull_varattnos_hook)")));
+		return;
+	}
+
 	/* Nothing to do if no generated columns */
 	if (!(tupdesc->constr && tupdesc->constr->has_generated_stored))
 		return;
@@ -460,7 +467,7 @@ ExecInitStoredGenerated(ResultRelInfo *resultRelInfo,
 			{
 				Bitmapset  *attrs_used = NULL;
 
-				pull_varattnos((Node *) expr, 1, &attrs_used);
+				pull_varattnos_hook((Node *) expr, 1, &attrs_used);
 
 				if (!bms_overlap(updatedCols, attrs_used))
 					continue;	/* need not update this column */

@@ -743,6 +743,13 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
 	Var		   *var;
 	Node	   *clause_expr;
 
+	if (!is_pseudo_constant_clause_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (is_pseudo_constant_clause_hook)")));
+		return false;
+	}
+
 	if (IsA(clause, RestrictInfo))
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) clause;
@@ -768,9 +775,9 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
 			return false;
 
 		/* Make sure non-selected argument is a pseudoconstant. */
-		if (is_pseudo_constant_clause(lsecond(expr->args)))
+		if (is_pseudo_constant_clause_hook(lsecond(expr->args)))
 			clause_expr = linitial(expr->args);
-		else if (is_pseudo_constant_clause(linitial(expr->args)))
+		else if (is_pseudo_constant_clause_hook(linitial(expr->args)))
 			clause_expr = lsecond(expr->args);
 		else
 			return false;
@@ -814,7 +821,7 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
 		 * We know it's always (Var IN Const), so we assume the var is the
 		 * first argument, and pseudoconstant is the second one.
 		 */
-		if (!is_pseudo_constant_clause(lsecond(expr->args)))
+		if (!is_pseudo_constant_clause_hook(lsecond(expr->args)))
 			return false;
 
 		clause_expr = linitial(expr->args);
@@ -1171,6 +1178,13 @@ dependency_is_compatible_expression(Node *clause, Index relid, List *statlist, N
 			   *lc2;
 	Node	   *clause_expr;
 
+	if (!is_pseudo_constant_clause_hook)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("planner have not implemented (is_pseudo_constant_clause_hook)")));
+		return false;
+	}
+
 	if (IsA(clause, RestrictInfo))
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) clause;
@@ -1196,9 +1210,9 @@ dependency_is_compatible_expression(Node *clause, Index relid, List *statlist, N
 			return false;
 
 		/* Make sure non-selected argument is a pseudoconstant. */
-		if (is_pseudo_constant_clause(lsecond(expr->args)))
+		if (is_pseudo_constant_clause_hook(lsecond(expr->args)))
 			clause_expr = linitial(expr->args);
-		else if (is_pseudo_constant_clause(linitial(expr->args)))
+		else if (is_pseudo_constant_clause_hook(linitial(expr->args)))
 			clause_expr = lsecond(expr->args);
 		else
 			return false;
@@ -1242,7 +1256,7 @@ dependency_is_compatible_expression(Node *clause, Index relid, List *statlist, N
 		 * We know it's always (Var IN Const), so we assume the var is the
 		 * first argument, and pseudoconstant is the second one.
 		 */
-		if (!is_pseudo_constant_clause(lsecond(expr->args)))
+		if (!is_pseudo_constant_clause_hook(lsecond(expr->args)))
 			return false;
 
 		clause_expr = linitial(expr->args);
