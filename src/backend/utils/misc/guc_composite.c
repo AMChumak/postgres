@@ -1979,10 +1979,20 @@ char *dynamic_array_to_str(const void *structp, const char *type, bool serialize
 	if (!element_type)
 		return NULL;
 
+	is_expand = array_size >= expand_array_view_thd; /* expand_array_view_thd - global variable (GUC) */
+
+	/*process empty array*/
+	if (!array_size)
+	{
+		if (is_expand)
+			return guc_strdup(ERROR, "{size: 0, data: []}");
+		else
+			return guc_strdup(ERROR, "[]");
+	}
+
 	/* allocate string for each field, fill it, and then concatenate */
 	parts = (char **)guc_malloc(ERROR, array_size * sizeof(char *));
 	total_size = 3; /* outer braces and \0 */
-	is_expand = array_size >= expand_array_view_thd; /* expand_array_view_thd - global variable (GUC) */
 
 	datap = *((void **)structp);
 
