@@ -70,6 +70,7 @@ char *get_static_aray_element_type(const char *type_name, const char *field);
 char *get_dynamic_array_element_type(const char *type_name, const char *field, const void *structure);
 char *get_struct_field_type(const char *type_name, const char *field);
 char *get_field_type_name(const char *type_name, const char *field);
+char *array_to_str(const void *data, int size, const char *type, bool serialize, bool extend);
 char *static_array_to_str(const void *structp, const char *type, bool serialize);
 char *dynamic_array_to_str(const void *structp, const char *type, bool serialize);
 bool is_atomic_type(const char* type);
@@ -103,7 +104,7 @@ parser_res parse_extended_dynamic_array(char *strval, const char *array_type, vo
 parser_res parse_atomic_type(char *strval, const char *struct_type, void *result, int flags, const char **hintmsg);
 parser_res parse_structure(char *strval, const char *struct_type, void *res_struct, int flags, const char **hintmsg);
 parser_res parse_composite_impl(char *value, const char *type, void *result, int flags, const char **hintmsg);
-
+int strcntchr(const char *str, const char c);
 
 /*
  * Finds symbol on the same nest level.
@@ -1904,51 +1905,139 @@ void *get_nest_field_ptr(const void *structure, const char *struct_type, const c
 }
 
 
-/*
- *  Converts object of static array type to string
- */
-char *static_array_to_str(const void *structp, const char *type, bool serialize)
+int strcntchr(const char *str, const char c)
 {
-	char *glue_arr = NULL;
+	int cnt = 0;
+	char *cur;
+	while ((cur = strchr(str, c)) != NULL)
+		cnt++;
+	return cnt;
+}
+
+
+/*
+ * Core of static_array_to_str and dynamic_array_to_str
+ */
+char *array_to_str(const void *data, int size, const char *type, bool serialize, bool extend)
+{
+	int cnt_tabs = extend ? 2 : 1;
+	const char *tab_prefix = extend ? "\t\t" : "\t";
+	int total_size = 40;
+	char *glue_array = NULL;
 	char *glue_arr_term = NULL;
-	int total_size = 3; /* outer braces and \0 */
-	int array_size = get_static_array_size(type);
-	char **parts;
-	int i = 0;
+	char **parts = NULL;
 	char *element_type = get_array_basic_type(type);
-	if (!element_type || array_size < 0)
-		return NULL;
+	int i = 0;
+
+	/* process empty array */
+	if (!size)
+	{
+		if (extend)
+		{
+			if (serialize)
+				return guc_strdup(ERROR, "{size: 0, data: []}");
+			else
+			 	return guc_strdup(ERROR, "{\n\tsize: 0,\n\tdata: []\n}");
+		}
+		else
+			return guc_strdup(ERROR, "[]");
+	}
 
 	/* allocate string for each field, fill it, and then concatenate */
-	parts = (char **)guc_malloc(ERROR, array_size * sizeof(char *));
+	parts = guc_malloc(ERROR, sizeof(char *) * size);
 
-	/*recursive call for each element of array */
-	for (; i < array_size; i++)
+	/* recursive call for each element of array */
+	for (; i < size; i++)
 	{
 		int offset = get_element_offset_with_index(type, i);
 		if (offset < 0)
 			goto out;
-		parts[i] = struct_to_str((char *)structp + offset, element_type, serialize);
+
+		parts[i] = struct_to_str((char *)data + offset, element_type, serialize);
 		if (!parts[i])
 			goto out;
+
+		/* 2 = strlen(",\n"), so last comma is excess, but first \n is uncounted */
 		total_size += strlen(parts[i]) + 2;
+
+		/* add tab at the each string beginning for non-serialize representation */
+		if (!serialize)
+			total_size += strcntchr(parts[i], '\n') * cnt_tabs + 1;
 	}
 	i = 0;
 
-	/* concatenate part strings */
-	glue_arr = (char *)guc_malloc(ERROR, total_size * sizeof(char));
-	sprintf(glue_arr, "[");
-	glue_arr_term = glue_arr + 1;
+	/* allocate memory for string representation */
+	glue_array = (char *)guc_malloc(ERROR, total_size * sizeof(char));
 
-	for (int j = 0; j < array_size - 1; j++)
+	/* write prefix */
+	if (extend)
 	{
-		sprintf(glue_arr_term, "%s, ", parts[j]);
-		glue_arr_term += strlen(parts[j]) + 2;
+		if (serialize)
+			sprintf(glue_array,"{size: %d, data: [", size);
+		else
+			sprintf(glue_array,"{\n\tsize: %d,\n\tdata: [\n", size);
+	}
+	else
+	{
+		if (serialize)
+			sprintf(glue_array,"[");
+		else
+			sprintf(glue_array,"[\n");
+	}
+	glue_arr_term = glue_array + strlen(glue_array);
+
+	/* glue parts */
+	for (int j = 0; j < size; j++)
+	{
+		if (serialize)
+		{
+			sprintf(glue_arr_term, "%s", parts[j]);
+			glue_arr_term += strlen(parts[j]);
+
+			if (j < size - 1)
+			{
+				sprintf(glue_arr_term, ", ");
+				glue_arr_term += 2;
+			}
+		}
+		else
+		{
+			/* in non-serialized version add tabs at the beginning of each line*/
+			char *str_saveptr;
+			char *str_begin = strtok_r(parts[j], "\n", &str_saveptr);
+			sprintf(glue_arr_term, "%s%s", tab_prefix, str_begin);
+			glue_arr_term += strlen(glue_arr_term);
+
+			while ((str_begin = strtok_r(NULL, "\n", &str_saveptr)) != NULL)
+			{
+				sprintf(glue_arr_term, "\n%s%s", tab_prefix, str_begin);
+				glue_arr_term += strlen(glue_arr_term);
+			}
+
+			if (j < size - 1)
+			{
+				sprintf(glue_arr_term, ",\n");
+				glue_arr_term += 2;
+			}
+		}
 		guc_free(parts[j]);
 	}
-	sprintf(glue_arr_term, "%s]", parts[array_size - 1]);
-	glue_arr_term += strlen(parts[array_size - 1]) + 1;
-	guc_free(parts[array_size - 1]);
+
+	/* write suffix*/
+	if (extend)
+	{
+		if (serialize)
+			sprintf(glue_arr_term, "]}");
+		else
+			sprintf(glue_arr_term, "\n\t]\n}");
+	}
+	else
+	{
+		if (serialize)
+			sprintf(glue_arr_term, "]");
+		else
+		 	sprintf(glue_arr_term, "\n]");
+	}
 
 out:
 	/* free all previous parts and go out */
@@ -1956,7 +2045,16 @@ out:
 		guc_free(parts[j]);
 	guc_free(element_type);
 	guc_free(parts);
-	return glue_arr;
+	return glue_array;
+}
+
+/*
+ *  Converts object of static array type to string
+ */
+char *static_array_to_str(const void *structp, const char *type, bool serialize)
+{
+	int array_size = get_static_array_size(type);
+	return array_to_str(structp, array_size, type, serialize, false);
 }
 
 
@@ -1967,81 +2065,13 @@ out:
  */
 char *dynamic_array_to_str(const void *structp, const char *type, bool serialize)
 {
-	void *datap;
-	bool is_expand;
-	int total_size;
-	char **parts;
-	char *glue_arr = NULL;
-	char *glue_arr_term = NULL;
-	int i = 0;
 	int array_size = dynamic_array_size(structp);
-	char *element_type = get_array_basic_type(type);
-	if (!element_type)
-		return NULL;
 
-	is_expand = array_size >= expand_array_view_thd; /* expand_array_view_thd - global variable (GUC) */
-
-	/*process empty array*/
-	if (!array_size)
-	{
-		if (is_expand)
-			return guc_strdup(ERROR, "{size: 0, data: []}");
-		else
-			return guc_strdup(ERROR, "[]");
-	}
-
-	/* allocate string for each field, fill it, and then concatenate */
-	parts = (char **)guc_malloc(ERROR, array_size * sizeof(char *));
-	total_size = 3; /* outer braces and \0 */
-
-	datap = *((void **)structp);
-
-	if (is_expand)
-		total_size += 30; /* max len of decimal int32 + facade */
-
-	/*recursive call for each element of array*/
-	for (; i < array_size; i++)
-	{
-		int offset = get_element_offset_with_index(type, i);
-		if (offset < 0)
-			goto out;
-		parts[i] = struct_to_str((char *)datap + offset, element_type, serialize);
-		if (!parts[i])
-			goto out;
-		total_size += strlen(parts[i]) + 2;
-	}
-	i = 0;
-
-	/* concatenate part strings */
-	glue_arr = (char *)guc_malloc(ERROR, total_size * sizeof(char));
-
-	if (is_expand)
-		sprintf(glue_arr,"{size: %d, data: [", array_size);
-	else
-		sprintf(glue_arr,"[");
-
-	glue_arr_term = glue_arr + strlen(glue_arr);
-	for (int j = 0; j < array_size-1; j++)
-	{
-		sprintf(glue_arr_term, "%s, ", parts[j]);
-		glue_arr_term += strlen(parts[j]) + 2;
-		guc_free(parts[j]);
-	}
-	sprintf(glue_arr_term, "%s]", parts[array_size - 1]);
-	glue_arr_term += strlen(parts[array_size - 1]) + 1;
-	guc_free(parts[array_size - 1]);
-
-	if (is_expand)
-		sprintf(glue_arr_term++, "}");
-
-out:
-	/* free all previous parts and go out */
-	for (int j = 0; j < i; j++)
-		guc_free(parts[j]);
-	guc_free(element_type);
-	guc_free(parts);
-	return glue_arr;
+	/* expand_array_view_thd - global variable (GUC) */
+	bool expand = array_size >= expand_array_view_thd;
+	return array_to_str(*(void**)structp, array_size, type, serialize, expand);
 }
+
 
 char *atomic_to_str(const void *structp, const char *type, bool serialize)
 {
@@ -2130,7 +2160,7 @@ char *structure_to_str(const void *structp, const char *type, bool serialize)
 
 	/* allocate string for each field, fill it, and then concatenate */
 	parts = (char **)guc_malloc(ERROR, cnt_fields * sizeof(char *));
-	total_size = 3;   /* outer braces and \0 */
+	total_size = 4;   /* outer braces and \0 */
 
 	/* recurse call for fields */
 	for (; i < cnt_fields; i++)
@@ -2147,25 +2177,61 @@ char *structure_to_str(const void *structp, const char *type, bool serialize)
 			goto out;
 		/* strlen(name) + 4 = strlen(", <name>: ") */
 		total_size += strlen(parts[i]) + strlen(struct_type->fields[i].name) + 4;
+
+		/* strlen("\t\n") for non-serialized*/
+		if (!serialize)
+			total_size += 2;
 	}
 	i = 0;
 
 	/* concatenate strings */
 	glue_struct = (char *)guc_malloc(ERROR, total_size * sizeof(char));
-	sprintf(glue_struct, "{");
-	glue_struct_term = glue_struct + 1;
+	glue_struct_term = glue_struct;
 
-	for (int j = 0; j < cnt_fields - 1; j++)
+	/* print prefix */
+	sprintf(glue_struct_term++, "{");
+	if (!serialize)
+		sprintf(glue_struct_term++, "\n");
+
+	/* print fields */
+	for (int j = 0; j < cnt_fields; j++)
 	{
-		sprintf(glue_struct_term, "%s: %s, ", struct_type->fields[j].name, parts[j]);
-		glue_struct_term += strlen(struct_type->fields[j].name) + strlen(parts[j]) + 4;
+		if (serialize)
+		{
+			sprintf(glue_struct_term, "%s: %s", struct_type->fields[j].name, parts[j]);
+			glue_struct_term += strlen(glue_struct_term);
+			if (j < cnt_fields - 1)
+			{
+				sprintf(glue_struct_term, ", ");
+				glue_struct_term += 2;
+			}
+		}
+		else
+		{
+			/* in non-serialized version add tabs at the beginning of each line*/
+			char *str_saveptr;
+			char *str_begin = strtok_r(parts[j], "\n", &str_saveptr);
+			sprintf(glue_struct_term, "\t%s: %s", struct_type->fields[j].name, str_begin);
+			glue_struct_term += strlen(glue_struct_term);
+
+			while ((str_begin = strtok_r(NULL, "\n", &str_saveptr)) != NULL)
+			{
+				sprintf(glue_struct_term, "\n\t%s", str_begin);
+				glue_struct_term += strlen(glue_struct_term);
+			}
+
+			if (j < cnt_fields - 1)
+			{
+				sprintf(glue_struct_term, ",\n");
+				glue_struct_term += 2;
+			} else
+				sprintf(glue_struct_term++, "\n");
+		}
 		guc_free(parts[j]);
 	}
 
-	sprintf(glue_struct_term, "%s: %s}", struct_type->fields[cnt_fields - 1].name, parts[cnt_fields - 1]);
-	glue_struct_term += strlen(struct_type->fields[cnt_fields - 1].name) + strlen(parts[cnt_fields - 1]) + 3;
-
-	guc_free(parts[cnt_fields - 1]);
+	/* print suffix */
+	sprintf(glue_struct_term, "}");
 out:
 	/* free all previous parts and go out */
 	for (int j = 0; j < i; j++)
