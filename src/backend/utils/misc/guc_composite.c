@@ -45,12 +45,6 @@ int expand_array_view_thd;
 
 #define STRUCT_FIELDS_DELIMETER ";"
 
-
-/*
- * Get size in dynamic array. It places after pointer to data
- */
-#define dynamic_array_size(ptr) (*(int *)((char *)ptr + sizeof(void *)))
-
 struct DynArrTmp
 {
 	void *data;
@@ -60,9 +54,8 @@ struct DynArrTmp
 
 HTAB *guc_types_hashtab;
 
-int get_static_array_size(const char * type_name);
-static int get_field_offset(const char * type_name, const char *field);
-char *get_array_basic_type(const char * array_type_name);
+
+
 static int get_type_offset(const char *type_name);
 bool is_assignment_list(const char *value);
 bool parse_placeholder_patch_list(const char *value, const char *type, void **result,const void *prev_val, int flags, const char **hintmsg);
@@ -70,7 +63,6 @@ int canonize_idx(const char * field);
 char *get_static_aray_element_type(const char *type_name, const char *field);
 char *get_dynamic_array_element_type(const char *type_name, const char *field, const void *structure);
 char *get_struct_field_type(const char *type_name, const char *field);
-char *get_field_type_name(const char *type_name, const char *field);
 char *array_to_str(const void *data, int size, const char *type, bool serialize, bool extend);
 char *static_array_to_str(const void *structp, const char *type, bool serialize);
 char *dynamic_array_to_str(const void *structp, const char *type, bool serialize);
@@ -86,7 +78,6 @@ void free_aux_mem_stat_arr(void *delptr, const char *type);
 void free_aux_mem_dyn_arr(void *delptr, const char *type);
 void free_aux_structure_mem(void *delptr, const char *type);
 void dynamic_array_duplicate(void *dest_struct, const void *src_struct, const char *type);
-static int get_element_offset_with_index(const char *type_name, int index);
 static int get_dynamic_array_mem_size_with_length(const char *type_name, const int length);
 parser_res find_same_level_symbol(const char *start, const char symbol);
 parser_res get_index(char *start);
