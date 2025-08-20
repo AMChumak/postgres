@@ -21,6 +21,31 @@ backend_sources += files(
   'tzparser.c',
 )
 
+# see ../../parser/meson.build
+guc_composite_parser_sources = []
+
+guc_composite_scan = custom_target('guc_composite_scan',
+  input: 'guc_composite_scan.l',
+  output: 'guc_composite_scan.c',
+  command: flex_cmd,
+)
+generated_sources += guc_composite_scan
+guc_composite_parser_sources += guc_composite_scan
+
+guc_composite_gram = custom_target('guc_composite_gram',
+  input: 'guc_composite_gram.y',
+  kwargs: bison_kw,
+)
+generated_sources += guc_composite_gram.to_list()
+guc_composite_parser_sources += guc_composite_gram
+
+backend_link_with += static_library('guc_composite_parser',
+  guc_composite_parser_sources,
+  dependencies: [backend_code],
+  include_directories: include_directories('.'),
+  kwargs: internal_lib_args,
+)
+
 guc_scan = custom_target('guc_scan',
   input: 'guc-file.l',
   output: 'guc-file.c',

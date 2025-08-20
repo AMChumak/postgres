@@ -15,11 +15,12 @@
  */
 #include "postgres.h"
 #include "utils/guc.h"
+#include "guc_composite.h"
 #include "guc_composite_gram.h"
 
-#define YY_DECL extern int	composite_yylex(union YYSTYPE *yylval_param, char *composite_parse_error_msg_p, yyscan_t yyscanner)
+#define YY_DECL extern int	guc_composite_yylex(union YYSTYPE *yylval_param, const char **hintmsg, yyscan_t yyscanner)
 
-%}
+}
 
 %option reentrant
 %option bison-bridge
@@ -33,7 +34,7 @@
 %option noyyrealloc
 %option noyyfree
 %option warn
-%option prefix="composite_yy"
+%option prefix="guc_composite_yy"
 
 SPACE			[ \t\n\r\f\v]
 
@@ -65,16 +66,19 @@ UNQUOTED_STRING ({LETTER_OR_DIGIT}|\.)*
 "]"                 { return ']'; }
 ","                 { return ','; }
 ":"                 { return ':'; }
+";"                 { return ';'; }
 
-.					{ return JUNK; }
+.					{
+						guc_composite_yyerror(NULL, NULL, hintmsg, 0, yyscanner, "illegible lexeme");
+						return JUNK;
+					}
 
 %%
 
 /* functions  for lexer */
 
 
-void
-composite_scanner_init(const char *str, yyscan_t *yyscannerp)
+void guc_composite_scanner_init(const char *str, yyscan_t *yyscannerp)
 {
 	yyscan_t	yyscanner;
 
@@ -86,25 +90,38 @@ composite_scanner_init(const char *str, yyscan_t *yyscannerp)
 	yy_scan_string(str, yyscanner);
 }
 
-void
-composite_scanner_finish(yyscan_t yyscanner)
+void guc_composite_scanner_finish(yyscan_t yyscanner)
 {
 	yylex_destroy(yyscanner);
 }
+
+void guc_composite_yyerror(void *composite_ptr, const char *composite_type, const char **hintmsg, int flags, yyscan_t yyscanner, const char *message)
+{
+	struct yyguts_t *yyg = (struct yyguts_t *) yyscanner;	/* needed for yytext
+															 * macro */
+	/* report only the first error in a parse operation */
+	if (*hintmsg)
+		return;
+	if (yytext[0])
+		*hintmsg = psprintf("%s at or near \"%s\"",
+										   message, yytext);
+	else
+		*hintmsg = psprintf("%s at end of input",
+										   message);
+}
+
 
 /*
  * Interface functions to make flex use palloc() instead of malloc().
  * It'd be better to make these static, but flex insists otherwise.
  */
 
-void *
-yyalloc(yy_size_t size, yyscan_t yyscanner)
+void *yyalloc(yy_size_t size, yyscan_t yyscanner)
 {
 	return palloc(size);
 }
 
-void *
-yyrealloc(void *ptr, yy_size_t size, yyscan_t yyscanner)
+void *yyrealloc(void *ptr, yy_size_t size, yyscan_t yyscanner)
 {
 	if (ptr)
 		return repalloc(ptr, size);
@@ -112,8 +129,7 @@ yyrealloc(void *ptr, yy_size_t size, yyscan_t yyscanner)
 		return palloc(size);
 }
 
-void
-yyfree(void *ptr, yyscan_t yyscanner)
+void yyfree(void *ptr, yyscan_t yyscanner)
 {
 	if (ptr)
 		pfree(ptr);

@@ -57,8 +57,6 @@ HTAB *guc_types_hashtab;
 
 
 static int get_type_offset(const char *type_name);
-bool is_assignment_list(const char *value);
-bool parse_placeholder_patch_list(const char *value, const char *type, void **result,const void *prev_val, int flags, const char **hintmsg);
 int canonize_idx(const char * field);
 char *get_static_aray_element_type(const char *type_name, const char *field);
 char *get_dynamic_array_element_type(const char *type_name, const char *field, const void *structure);
@@ -78,8 +76,6 @@ void free_aux_mem_stat_arr(void *delptr, const char *type);
 void free_aux_mem_dyn_arr(void *delptr, const char *type);
 void free_aux_structure_mem(void *delptr, const char *type);
 void dynamic_array_duplicate(void *dest_struct, const void *src_struct, const char *type);
-static int get_dynamic_array_mem_size_with_length(const char *type_name, const int length);
-parser_res find_same_level_symbol(const char *start, const char symbol);
 parser_res get_index(char *start);
 parser_res get_name(char *start);
 parser_res get_max_index(char *start);
@@ -1168,97 +1164,6 @@ parser_res parse_composite_impl(char *value, const char *type, void *result, int
 }
 
 /*
- * Entry point in parsing structure. This function is used to parse composite objects.
- * It allocate memory for the new object and uses parse_compoite_impl.
- * It also is used to parse placeholder patch list
- */
-bool parse_composite(const char *value, const char *type, void **result, const void *prev_val, int flags, const char **hintmsg)
-{
-	int size = 0;
-	char *scheme = NULL;
-	void *val = NULL;
-	parser_res parser_result = {};
-	bool check = false;
-	*hintmsg = NULL;
-
-	if (is_assignment_list(value))
-		return parse_placeholder_patch_list(value, type, result, prev_val, flags, hintmsg);
-
-	size = get_type_size(type);
-	scheme = guc_strdup(ERROR, value);
-	val = guc_malloc(ERROR, size);
-	check = true;
-
-	if (prev_val)
-		struct_dup_impl(val, prev_val, type);
-	else
-		memset(val, 0, size);
-
-	parser_result = parse_composite_impl(scheme, type, val, flags, hintmsg);
-
-	if (IS_STATUS_OK(parser_result))
-		*result = val;
-	else if (IS_STATUS_ERR(parser_result))
-	{
-		elog(WARNING, "in composite object: %s", value);
-		guc_free(val);
-		*result = NULL;
-		check = false;
-	}
-	guc_free(scheme);
-	return check;
-}
-
-
-/*
- * Functions examine string and decides that is recovery of placeholder (assignment list) or structure definition
- * assignemt list has signature: <path>=<value>;...;<path>=<value>;
- * maybe we should use signature: ;<path>=<value>;...;<path>=<value> when we will check first simbol, but this form is unusual
- */
- bool is_assignment_list(const char *value) {
-	return ';' == value[strlen(value) - 1];
-}
-
-
-/*
- * Placeholder patch list is used to support incremental semantic
- * for composite types placeholders.
- * Function parses assignment list in the way:
- * 1. slpit assignement by ';'
- * 2. assign patch
- */
-bool parse_placeholder_patch_list(const char *value, const char *type, void **result, const void *prev_val, int flags, const char **hintmsg) {
-	char *strval = guc_strdup(ERROR, value);
-	char *cur_patch = strval;
-	void *last_value = struct_dup(prev_val, type);
-
-	/* go throw list of patches delimited and ended with ';' */
-	while(*(cur_patch))
-	{
-		void *next_value;
-		char *next_del;
-		parser_res search_res = find_same_level_symbol(cur_patch, ';');
-		next_del = search_res.res_str;
-		*next_del = '\0';
-
-		if (!parse_composite(cur_patch, type, &next_value, last_value, flags, hintmsg))
-		{
-			guc_free(strval);
-			*result = last_value;
-			return false;
-		}
-
-		guc_free(last_value);
-		last_value = next_value;
-		cur_patch = next_del + 1;
-	}
-	guc_free(strval);
-	*result = last_value;
-
-	return true;
-}
-
-/*
  * Check that composite type is static array
  */
 bool is_static_array_type(const char *type_name)
@@ -1397,7 +1302,7 @@ static int get_array_mem_size(const char *type_name)
  * Gets dynamic array size
  * Casual way for using: see dynamic array size in next int field, after use that function
  */
-static int get_dynamic_array_mem_size(const char *type_name, const void *structp)
+int get_dynamic_array_mem_size(const char *type_name, const void *structp)
 {
 	int array_length = dynamic_array_size(structp);
 	return get_dynamic_array_mem_size_with_length(type_name, array_length);
@@ -1407,7 +1312,7 @@ static int get_dynamic_array_mem_size(const char *type_name, const void *structp
  * Gets dynamic array size
  * Casual way for using: see dynamic array size in next int field, after use that function
  */
-static int get_dynamic_array_mem_size_with_length(const char *type_name, const int length)
+int get_dynamic_array_mem_size_with_length(const char *type_name, const int length)
 {
 	int array_size;
 	int element_size;
@@ -1596,7 +1501,7 @@ char *get_field_type_name(const char *type_name, const char *field)
 /*
  * Gets offset of element of array by int index
  */
-static int get_element_offset_with_index(const char *type_name, int index)
+int get_element_offset_with_index(const char *type_name, int index)
 {
 	int rest;
 	int element_size;
@@ -1668,11 +1573,11 @@ static int get_struct_field_offset(const char *type_name, const char *field)
  *    static array. But start pointer is dereferenced "data" field
  *    (start of array elements) in this case.
  */
-static int get_field_offset(const char * type_name, const char *field) {
+int get_field_offset(const char * type_name, const char *field) {
 	if (!type_name || !field)
 		return -1;
 
-	/* extended dynamic arrya case */
+	/* extended dynamic array case */
 	if (is_dynamic_array_type(type_name))
 	{
 		if (!strcmp(field, "data"))

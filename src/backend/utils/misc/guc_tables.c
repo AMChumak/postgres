@@ -816,7 +816,7 @@ struct type_definition UserDefinedConfigureTypes[] = {
 	},
 	{
 		"ssn_description",
-		"string mode; string[] names"
+		"int mode; string[] names"
 	},
 	/* End-of-list marker */
 	{
@@ -5503,15 +5503,15 @@ struct config_enum ConfigureNamesEnum[] =
 
 struct config_struct ConfigureNamesStruct[] =
 {
-	{{"super_duper_ssn", PGC_USERSET, REPLICATION_PRIMARY,
-		gettext_noop("Number of synchronous standbys and list of names of potential synchronous ones."),
-		NULL},
+	{
+		{"ssn", PGC_USERSET, REPLICATION_PRIMARY,
+			gettext_noop("Selects the method for executing asynchronous I/O."),
+			NULL
+		},
 		"ssn_description",
 		&SuperDuperSyncStandbyNames,
 		&SuperDuperSyncStandbyNamesBoot,
-		NULL, NULL, NULL, NULL, NULL, NULL
 	},
-
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
