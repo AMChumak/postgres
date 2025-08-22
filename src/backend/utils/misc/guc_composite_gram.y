@@ -183,8 +183,10 @@ static void push_context(const char* type, void *start)
 
 static void free_context(parser_ctx *context)
 {
-    pfree(context->type);
-    pfree(context);
+    if (context->type)
+        pfree(context->type);
+    if (context)
+        pfree(context);
 }
 
 static void free_context_list(void)
@@ -328,7 +330,7 @@ static void prepare_array(void)
     else
     {
         /*
-         * There is 3 cases that could be:
+         * There are 4 cases that could be:
          * "{data: [" or "[" or "[ [" or "{ field: ["
          * and only first case don't need creating new stack layer
          */
@@ -348,7 +350,6 @@ static void prepare_array(void)
             else
                 push_context(context(0)->type, NULL);
         }
-
         data = context(0)->start;
         /*
         * Current dynamic array could be empty. In this case create fictitious stack layer
@@ -377,10 +378,29 @@ static void parse_composite_end(void)
      * If is_dynamic == true => that is outer context
      * Else that is inner context
      */
-    bool is_dynamic = is_dynamic_array_type(context(0)->type);
+    bool is_dynamic = false;
+    /*
+     * is_extended is used in cases when we delete outer context of array
+     * that is nested in dynamic array in compact form
+     */
+    bool is_extended = context(0)->extended;
+
+    /*
+     * type of current context might have NULL type in case than we parse {}
+     * Then go exactly to deleting context
+     */
+    if (context(0)->type)
+        is_dynamic = is_dynamic_array_type(context(0)->type);
     free_context((parser_ctx *)list_nth(contexts, 0));
     contexts = list_delete_first(contexts);
-    /* Free up outer context for dynamic array in compact form.
+
+    /*
+     * If deleted layer was extended, that layer was outer context => return
+     */
+    if (is_extended)
+        return;
+    /*
+     * Free up outer context for dynamic array in compact form.
      * See comments in parse_array function
      */
     if (!list_empty(contexts) && is_dynamic &&
