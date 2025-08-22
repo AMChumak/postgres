@@ -202,7 +202,7 @@ static void check_name(yyscan_t yyscanner, const char **hintmsg)
 {
     /* Indexes in array are exist either for each element or for no one */
     if (is_static_array_type(context(1)->type) ||
-        is_dynamic_array_type(context(1)->type))
+        (is_dynamic_array_type(context(1)->type) && context(1)->extended != true))
     {
         if (context(0)->has_name)
         {
@@ -265,7 +265,7 @@ static void check_memory(yyscan_t yyscanner, const char **hintmsg)
      * If context(1) is extended dynamic array (i.e. outer context),
      * we are going to parse "data" or "size" field
      */
-    if (!(is_dynamic_array_type(context(1)->type) && !context(1)->extended))
+    if (!(is_dynamic_array_type(context(1)->type) && context(1)->extended != true))
         return;
 
     len = dynamic_array_size(context(2)->start);
@@ -318,34 +318,48 @@ static void prepare_array(void)
 {
     void *data = NULL;
     char *basic_type = get_array_basic_type(context(0)->type);
+    /*
+     */
     if (!is_dynamic_array_type(context(0)->type))
     {
         push_context(pstrdup(basic_type), context(0)->start);
         goto out;
     }
-    /*
-     * Each dynamic array has 2 contexts: outer context for structure {data, size}
-     * And inner context for allocated data. Because of different ways to set
-     * dynamic array (extended and compact forms) outer context of dynamic array
-     * has flag "extended". When we pop from stack, we see this flag and for
-     * compact representation of array we pop twice (for purpose of popping
-     * inner and outer contexts at one time)
-     */
-    data = *(void **)context(0)->start;
-    if (data)
-        push_context(context(0)->type, data);
     else
-        push_context(context(0)->type, NULL);
+    {
+        /*
+         * There is 3 cases that could be:
+         * "{data: [" or "[" or "[ [" or "{ field: ["
+         * and only first case don't need creating new stack layer
+         */
+        if (!(list_length(contexts) > 1 && context(1)->extended))
+        {
+            data = *(void **)context(0)->start;
+            /*
+            * Each dynamic array has 2 contexts: outer context for structure {data, size}
+            * And inner context for allocated data. Because of different ways to set
+            * dynamic array (extended and compact forms) outer context of dynamic array
+            * has flag "extended". When we pop from stack, we see this flag and for
+            * compact representation of array we pop twice (for purpose of popping
+            * inner and outer contexts at one time)
+            */
+            if (data)
+                push_context(context(0)->type, data);
+            else
+                push_context(context(0)->type, NULL);
+        }
 
-    /*
-     * Current dynamic array could be empty. In this case create fictitious stack layer
-     * (NULL in start field means that now we parse element of empty dynamic array)
-     * for purposes of recursive algorithm
-     */
-    if (data)
-        push_context(pstrdup(basic_type), data);
-    else
-        push_context(pstrdup(basic_type), NULL);
+        data = context(0)->start;
+        /*
+        * Current dynamic array could be empty. In this case create fictitious stack layer
+        * (NULL in start field means that now we parse element of empty dynamic array)
+        * for purposes of recursive algorithm
+        */
+        if (data)
+            push_context(pstrdup(basic_type), data);
+        else
+            push_context(pstrdup(basic_type), NULL);
+    }
 out:
     guc_free(basic_type);
 }
@@ -370,7 +384,7 @@ static void parse_composite_end(void)
      * See comments in parse_array function
      */
     if (!list_empty(contexts) && is_dynamic &&
-        is_dynamic_array_type(context(0)->type) && !context(0)->extended)
+        is_dynamic_array_type(context(0)->type) && context(0)->extended != true)
     {
         free_context((parser_ctx *)list_nth(contexts, 0));
         contexts = list_delete_first(contexts);
@@ -465,8 +479,21 @@ static void parse_name(const char *name, yyscan_t yyscanner, const char **hintms
     }
     else
         parse_field(name, yyscanner, hintmsg);
-    if (strcmp(name, "size") == 0 && context(1)->extended == true)
+
+    /* process fields size and data in extended version of dynamic array */
+    if (context(1)->extended)
+    {
+        if (strcmp(name, "size") == 0)
             context(1)->fixed_size = FIXED_SIZE_IS_BEING_SETTED;
+        else if (strcmp(name, "data") == 0)
+        {
+            void *data = *(void **)context(1)->start;
+            if (data)
+                context(0)->start = *(void **)data;
+            else
+                context(0)->start = NULL;
+        }
+    }
     context(0)->has_name = true;
 }
 
@@ -483,14 +510,20 @@ static void parse_simple_opt(char *strval, const char *struct_type, void *result
         /*
          * Block of code for field "size" in dynamic array
          * This block of code must be above parse_int(). Because standard parsing will
-         * overwrite old lenght, but we need it in reallocate_dynamic_array()
+         * overwrite old length, but we need it in reallocate_dynamic_array()
          */
         if (list_length(contexts) > 1 && context(1)->fixed_size == FIXED_SIZE_IS_BEING_SETTED)
         {
             int len = parse_index(strval, yyscanner, hintmsg);
             if (*hintmsg)
                 return;
+            if (len <= context(1)->max_idx)
+            {
+                guc_composite_yyerror(last_context->start, last_context->type, hintmsg, 0, yyscanner, "fixed size of dynamic array less or eaual maximum index");
+                return;
+            }
             reallocate_dynamic_array(context(1)->type, context(1)->start, len);
+            context(1)->fixed_size = FIXED_SIZE_IS_SETTED;
         }
 
 		if (!parse_int(strval, (int *)result, flags, hintmsg))

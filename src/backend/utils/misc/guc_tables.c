@@ -5508,9 +5508,9 @@ struct config_struct ConfigureNamesStruct[] =
 			gettext_noop("Selects the method for executing asynchronous I/O."),
 			NULL
 		},
-		"ssn_description",
-		&SuperDuperSyncStandbyNames,
-		&SuperDuperSyncStandbyNamesBoot,
+		"string[][]",
+		&superNames,
+		&superNamesBoot,
 	},
 	/* End-of-list marker */
 	{
