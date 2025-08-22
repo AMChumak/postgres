@@ -94,7 +94,6 @@ int get_field_offset(const char * type_name, const char *field);
 char *get_field_type_name(const char *type_name, const char *field);
 int get_dynamic_array_mem_size(const char *type_name, const void *structp);
 int get_dynamic_array_mem_size_with_length(const char *type_name, const int length);
-parser_res find_same_level_symbol(const char *start, const char symbol);
 
 /*
  * Internal functions for parsing guc_composite grammar,

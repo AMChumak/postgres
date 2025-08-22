@@ -81,8 +81,6 @@ static void parse_element(const char *index, yyscan_t yyscanner, const char **hi
 static void parse_field(const char *name, yyscan_t yyscanner, const char **hintmsg);
 static void parse_name(const char *name, yyscan_t yyscanner, const char **hintmsg);
 static void parse_simple_opt(char *strval, const char *struct_type, void *result, int flags, yyscan_t yyscanner, const char **hintmsg);
-static bool is_assignment_list(const char *value);
-static bool parse_placeholder_patch_list(const char *value, const char *type, void **result,const void *prev_val, int flags, const char **hintmsg);
 %}
 %parse-param {void *composite_ptr}
 %parse-param {const char *composite_type}
@@ -605,53 +603,4 @@ bool parse_composite(const char *strvalue, const char *type, void **result, cons
     else
         *result = val;
 	return check;
-}
-
-
-/*
- * Functions examine string and decides that is recovery of placeholder (assignment list) or structure definition
- * assignemt list has signature: <path>=<value>;...;<path>=<value>;
- * maybe we should use signature: ;<path>=<value>;...;<path>=<value> when we will check first simbol, but this form is unusual
- */
-static bool is_assignment_list(const char *value) {
-	return ';' == value[strlen(value) - 1];
-}
-
-
-/*
- * Placeholder patch list is used to support incremental semantic
- * for composite types placeholders.
- * Function parses assignment list in the way:
- * 1. slpit assignement by ';'
- * 2. assign patch
- */
-static bool parse_placeholder_patch_list(const char *value, const char *type, void **result, const void *prev_val, int flags, const char **hintmsg) {
-	char *strval = guc_strdup(ERROR, value);
-	char *cur_patch = strval;
-	void *last_value = struct_dup(prev_val, type);
-
-	/* go throw list of patches delimited and ended with ';' */
-	while(*(cur_patch))
-	{
-		void *next_value;
-		char *next_del;
-		parser_res search_res = find_same_level_symbol(cur_patch, ';');
-		next_del = search_res.res_str;
-		*next_del = '\0';
-
-		if (!parse_composite(cur_patch, type, &next_value, last_value, flags, hintmsg))
-		{
-			guc_free(strval);
-			*result = last_value;
-			return false;
-		}
-
-		guc_free(last_value);
-		last_value = next_value;
-		cur_patch = next_del + 1;
-	}
-	guc_free(strval);
-	*result = last_value;
-
-	return true;
 }
