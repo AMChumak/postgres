@@ -805,15 +805,10 @@ char *array_to_str(const void *data, int size, const char *type, bool serialize,
 		if (serialize)
 			appendStringInfo(&buf, "]}");
 		else
-			appendStringInfo(&buf, "\n\t]\n}");
+			appendStringInfo(&buf, "\t]\n}");
 	}
 	else
-	{
-		if (serialize)
-			appendStringInfo(&buf, "]");
-		else
-		 	appendStringInfo(&buf, "\n]");
-	}
+		appendStringInfo(&buf, "]");
 
 
 	result = guc_strdup(ERROR, buf.data);
