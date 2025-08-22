@@ -476,6 +476,20 @@ static void parse_field(const char *name, yyscan_t yyscanner, const char **hintm
     context(0)->type = pstrdup(field_type);
     context(0)->start = (char *)context(1)->start + offset;
     guc_free(field_type);
+    /* process fields size and data in extended version of dynamic array */
+    if (context(1)->extended)
+    {
+        if (strcmp(name, "size") == 0)
+            context(1)->fixed_size = FIXED_SIZE_IS_BEING_SETTED;
+        else if (strcmp(name, "data") == 0)
+        {
+            void *data = *(void **)context(1)->start;
+            if (data)
+                context(0)->start = data;
+            else
+                context(0)->start = NULL;
+        }
+    }
 }
 
 
@@ -497,21 +511,6 @@ static void parse_name(const char *name, yyscan_t yyscanner, const char **hintms
     }
     else
         parse_field(name, yyscanner, hintmsg);
-
-    /* process fields size and data in extended version of dynamic array */
-    if (context(1)->extended)
-    {
-        if (strcmp(name, "size") == 0)
-            context(1)->fixed_size = FIXED_SIZE_IS_BEING_SETTED;
-        else if (strcmp(name, "data") == 0)
-        {
-            void *data = *(void **)context(1)->start;
-            if (data)
-                context(0)->start = *(void **)data;
-            else
-                context(0)->start = NULL;
-        }
-    }
     context(0)->has_name = true;
 }
 
@@ -579,7 +578,6 @@ bool parse_composite(const char *strvalue, const char *type, void **result, cons
 	void *val = NULL;
     int parser_result = 0;
 	bool check = true;
-
 	*hintmsg = NULL;
 	size = get_type_size(type);
 	val = guc_malloc(ERROR, size);

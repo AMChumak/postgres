@@ -1033,9 +1033,10 @@ char *normalize_struct_value(const char *name, const char *value)
 	if (!is_composite)
 	{
 		char *escaped = escape_single_quotes_ascii(value);
+		int len = strlen(escaped) + 3;
 		/* escape */
-		prepared_val = guc_malloc(ERROR, strlen(escaped) + 3);
-		sprintf(prepared_val, "\'%s\'",escaped);
+		prepared_val = guc_malloc(ERROR, len);
+		snprintf(prepared_val,len, "\'%s\'",escaped);
 		free(escaped);
 	}
 	else
@@ -1142,7 +1143,7 @@ char *convert_path_composite (const char *field_path, const char *value)
 	char* prefix = guc_strdup(ERROR, "");
 	char *suffix = guc_strdup(ERROR, "");
 	char *result;
-
+	int len;
 	/* skip guc name */
 	cur_field = tokenize_field_path(NULL);
 
@@ -1152,23 +1153,25 @@ char *convert_path_composite (const char *field_path, const char *value)
 		int prefix_len = strlen(prefix);
 		int suffix_len = strlen(suffix);
 
-		char *next_prefix = guc_malloc(ERROR, prefix_len + 3 + strlen(cur_field) + 1); /* 3 for "[: ", 1 for '\0' */
-		char *next_suffix = guc_malloc(ERROR, suffix_len + 2);
+		int prefix_diff_len = 3 + strlen(cur_field) + 1;	/* 3 for "[: ", 1 for '\0' */
+		int suffix_diff_len = 2;
+		char *next_prefix = guc_malloc(ERROR, prefix_len + prefix_diff_len);
+		char *next_suffix = guc_malloc(ERROR, suffix_len + suffix_diff_len);
 
-		sprintf(next_prefix, "%s", prefix);
+		snprintf(next_prefix,prefix_len + 1, "%s", prefix);
 		/* define array or structure */
 		if (isdigit(cur_field[0]))
 		{
-			sprintf(next_prefix + prefix_len, "[");
-			sprintf(next_suffix, "]");
+			snprintf(next_prefix + prefix_len, 2, "[");
+			snprintf(next_suffix, 2, "]");
 		}
 		else
 		{
-			sprintf(next_prefix + prefix_len, "{");
-			sprintf(next_suffix, "}");
+			snprintf(next_prefix + prefix_len, 2, "{");
+			snprintf(next_suffix, 2, "}");
 		}
-		sprintf(next_prefix + prefix_len + 1, "%s: ", cur_field);
-		sprintf(next_suffix + 1, "%s", suffix);
+		snprintf(next_prefix + prefix_len + 1, prefix_diff_len - 1, "%s: ", cur_field);
+		snprintf(next_suffix + 1, suffix_len + 1, "%s", suffix);
 
 		guc_free(prefix);
 		guc_free(suffix);
@@ -1180,8 +1183,9 @@ char *convert_path_composite (const char *field_path, const char *value)
 	}
 
 	/* construct result from prefix, suffix and value */
-	result = guc_malloc(ERROR, strlen(prefix) + strlen(value) + strlen(suffix) + 1);
-	sprintf(result, "%s%s%s", prefix, value, suffix);
+	len = strlen(prefix) + strlen(value) + strlen(suffix) + 1;
+	result = guc_malloc(ERROR, len);
+	snprintf(result, len, "%s%s%s", prefix, value, suffix);
 
 	guc_free(prefix);
 	guc_free(suffix);
