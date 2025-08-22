@@ -259,6 +259,9 @@ sub main
 		# Make sure any braces are split into separate fields
 		s/{/ { /g;
 		s/}/ } /g;
+		# Make exclusion for '{' and '}'
+		s/' \{ '/'{'/g;
+		s/' \} '/'}'/g;
 
 		# Likewise for comment start/end markers
 		s|\/\*| /* |g;

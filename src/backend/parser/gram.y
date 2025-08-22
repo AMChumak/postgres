@@ -890,6 +890,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %left		AT				/* sets precedence for AT TIME ZONE, AT LOCAL */
 %left		COLLATE
 %right		UMINUS
+%left		'{' '}'			/* that is '{' and '}' */
 %left		'[' ']'
 %left		'(' ')'
 %left		TYPECAST
@@ -1833,8 +1834,12 @@ var_value:	opt_boolean_or_string
 
 struct_only:	'{' list_expr '}'
 					{ $$ = psprintf("{%s}", $2); }
+				| '{' '}'
+					{ $$ = psprintf("{}"); }
 				| '[' list_expr ']'
 					{ $$ = psprintf("[%s]", $2); }
+				| '[' ']'
+					{ $$ = psprintf("[]"); }
 		;
 
 list_expr:	list_item
