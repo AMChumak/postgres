@@ -917,6 +917,12 @@
   boot_val => 'true',
 },
 
+{ name => 'extended_guc_arrays', type => 'bool', context => 'PGC_USERSET', group => 'CUSTOM_OPTIONS',
+  short_desc => 'Enables expanded view of dynamic arrays in GUC',
+  variable => 'extended_array_view',
+  boot_val => 'false',
+},
+
 { name => 'archive_timeout', type => 'int', context => 'PGC_SIGHUP', group => 'WAL_ARCHIVING',
   short_desc => 'Sets the amount of time to wait before forcing a switch to the next WAL file.',
   long_desc => '0 disables the timeout.',

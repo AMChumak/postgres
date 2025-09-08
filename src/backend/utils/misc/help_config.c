@@ -35,6 +35,7 @@ typedef union
 	struct config_int integer;
 	struct config_string string;
 	struct config_enum _enum;
+	struct config_composite _composite;
 } mixedStruct;
 
 
@@ -125,6 +126,18 @@ printMixedStruct(mixedStruct *structToPrint)
 											   structToPrint->_enum.boot_val));
 			break;
 
+		case PGC_COMPOSITE:
+			{
+				bool		not_write_to_file = false;
+				char	   *valstr = NULL;
+
+				valstr = composite_to_str(structToPrint->_composite.boot_val,
+										  structToPrint->_composite.type_name,
+										  not_write_to_file);
+				printf("COMPSITE %s\t%s\t\t\t", structToPrint->_composite.type_name, valstr);
+				guc_free(valstr);
+				break;
+			}
 		default:
 			write_stderr("internal error: unrecognized run-time parameter type\n");
 			break;

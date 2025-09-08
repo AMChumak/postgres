@@ -35,6 +35,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_parameter_acl.h"
 #include "guc_internal.h"
+#include "guc_composite.h"
 #include "libpq/pqformat.h"
 #include "libpq/protocol.h"
 #include "miscadmin.h"
@@ -62,16 +63,14 @@
 #endif
 
 /*
- * Precision with which REAL type guc values are to be printed for GUC
- * serialization.
- */
-#define REALTYPE_PRECISION 17
-
-/*
  * Safe search path when executing code as the table owner, such as during
  * maintenance operations.
  */
 #define GUC_SAFE_SEARCH_PATH "pg_catalog, pg_temp"
+
+#define is_marked_scalar(record,item) (record->status & GUC_IS_IN_FILE)\
+				&& !strchr(item->name, '-')\
+				&& !strchr(item->name, '[')
 
 static int	GUC_check_errcode_value;
 
@@ -270,6 +269,8 @@ static bool call_string_check_hook(struct config_string *conf, char **newval,
 								   void **extra, GucSource source, int elevel);
 static bool call_enum_check_hook(struct config_enum *conf, int *newval,
 								 void **extra, GucSource source, int elevel);
+static bool call_composite_check_hook(struct config_composite *conf, void *newval,
+									  void **extra, GucSource source, int elevel);
 
 
 /*
@@ -401,8 +402,13 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 
 		if (record)
 		{
-			/* If it's already marked, then this is a duplicate entry */
-			if (record->status & GUC_IS_IN_FILE)
+			/*
+			 * If it's already marked, then this is a duplicate entry However
+			 * composite values are patches that could intersect or union like
+			 * sets
+			 */
+			if (is_marked_scalar(record, item)) /* do not optimize for
+												 * composites */
 			{
 				/*
 				 * Mark the earlier occurrence(s) as dead/ignorable.  We could
@@ -741,6 +747,54 @@ set_string_field(struct config_string *conf, char **field, char *newval)
 		guc_free(oldval);
 }
 
+
+/*
+ * Detect whether compositeval is referenced anywhere in a GUC struct item
+ */
+static bool
+composite_used(struct config_composite *conf, void *compositeval)
+{
+	GucStack   *stack;
+
+	if (compositeval == conf->variable ||
+		compositeval == conf->reset_val ||
+		compositeval == conf->boot_val)
+		return true;
+
+	for (stack = conf->gen.stack; stack; stack = stack->prev)
+	{
+		if (compositeval == stack->prior.val.compositeval ||
+			compositeval == stack->masked.val.compositeval)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Assign value to a composite GUC option. Free the prior value if it's not
+ * referenced anywhere else in the option values (including stacked states).
+ * Set flag "value_on_heap" to true to allocate new value.
+ */
+static void
+set_composite(struct config_composite *conf, void **field, void *newval, bool value_on_heap)
+{
+	void	   *oldval = *field;
+
+	/* Do the assignment */
+	if (value_on_heap)
+		*field = composite_dup(newval, conf->type_name);
+	else
+	{
+		free_composite_impl(*field, conf->type_name);
+		composite_dup_impl(*field, newval, conf->type_name);
+	}
+
+	/* Free old value if it's not NULL and isn't referenced anymore */
+	if (value_on_heap && oldval && !composite_used(conf, oldval))
+		free_composite(oldval, conf->type_name);
+}
+
 /*
  * Detect whether an "extra" struct is referenced anywhere in a GUC item
  */
@@ -771,6 +825,10 @@ extra_field_used(struct config_generic *gconf, void *extra)
 			break;
 		case PGC_ENUM:
 			if (extra == ((struct config_enum *) gconf)->reset_extra)
+				return true;
+			break;
+		case PGC_COMPOSITE:
+			if (extra == ((struct config_composite *) gconf)->reset_extra)
 				return true;
 			break;
 	}
@@ -835,6 +893,14 @@ set_stack_value(struct config_generic *gconf, config_var_value *val)
 			val->val.enumval =
 				*((struct config_enum *) gconf)->variable;
 			break;
+		case PGC_COMPOSITE:
+			{
+				bool		value_on_heap = true;
+
+				set_composite((struct config_composite *) gconf,
+							  &(val->val.compositeval),
+							  ((struct config_composite *) gconf)->variable, value_on_heap);
+			}
 	}
 	set_extra_field(gconf, &(val->extra), gconf->extra);
 }
@@ -859,6 +925,15 @@ discard_stack_value(struct config_generic *gconf, config_var_value *val)
 							 &(val->val.stringval),
 							 NULL);
 			break;
+		case PGC_COMPOSITE:
+			{
+				bool		value_on_heap = true;
+
+				set_composite((struct config_composite *) gconf,
+							  &(val->val.compositeval),
+							  NULL, value_on_heap);
+				break;
+			}
 	}
 	set_extra_field(gconf, &(val->extra), NULL);
 }
@@ -907,6 +982,12 @@ build_guc_variables(void)
 	int			num_vars = 0;
 	HASHCTL		hash_ctl;
 	GUCHashEntry *hentry;
+
+	int			size_types;
+	int			num_types = 0;
+	HASHCTL		types_hash_ctl;
+	OptionTypeHashEntry *type_hentry;
+
 	bool		found;
 	int			i;
 
@@ -917,6 +998,12 @@ build_guc_variables(void)
 	GUCMemoryContext = AllocSetContextCreate(TopMemoryContext,
 											 "GUCMemoryContext",
 											 ALLOCSET_DEFAULT_SIZES);
+
+	/*
+	 * Count all type defintions
+	 */
+	for (i = 0; UserDefinedConfigureTypes[i].type_name; i++)
+		num_types++;
 
 	/*
 	 * Count all the built-in variables, and set their vartypes correctly.
@@ -962,9 +1049,46 @@ build_guc_variables(void)
 		num_vars++;
 	}
 
+	for (i = 0; ConfigureNamesComposite[i].gen.name; i++)
+	{
+		struct config_composite *conf = &ConfigureNamesComposite[i];
+
+		conf->gen.vartype = PGC_COMPOSITE;
+		num_vars++;
+	}
+
 	/*
-	 * Create hash table with 20% slack
+	 * Create hash tables with 20% slack
 	 */
+
+	size_types = num_types + num_types / 4;
+	types_hash_ctl.keysize = sizeof(char *);
+	types_hash_ctl.entrysize = sizeof(OptionTypeHashEntry);
+	types_hash_ctl.hash = guc_name_hash;
+	types_hash_ctl.match = guc_name_match;
+	types_hash_ctl.hcxt = GUCMemoryContext;
+	guc_types_hashtab = hash_create("GUC user types hash table",
+									size_types,
+									&types_hash_ctl,
+									HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
+
+	for (i = 0; UserDefinedConfigureTypes[i].type_name; i++)
+	{
+		struct type_definition *type_definition = &UserDefinedConfigureTypes[i];
+
+		type_hentry = (OptionTypeHashEntry *) hash_search(guc_types_hashtab,
+														  &type_definition->type_name,
+														  HASH_ENTER,
+														  &found);
+		Assert(!found);
+		type_hentry->definition = type_definition;
+
+		if (!is_scalar_type(type_definition->type_name))
+			init_type_definition(type_definition);
+	}
+
+	Assert(num_types == hash_get_num_entries(guc_types_hashtab));
+
 	size_vars = num_vars + num_vars / 4;
 
 	hash_ctl.keysize = sizeof(char *);
@@ -1037,6 +1161,17 @@ build_guc_variables(void)
 		hentry->gucvar = gucvar;
 	}
 
+	for (i = 0; ConfigureNamesComposite[i].gen.name; i++)
+	{
+		struct config_generic *gucvar = &ConfigureNamesComposite[i].gen;
+		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
+											  &gucvar->name,
+											  HASH_ENTER,
+											  &found);
+		Assert(!found);
+		hentry->gucvar = gucvar;
+	}
+
 	Assert(num_vars == hash_get_num_entries(guc_hashtab));
 }
 
@@ -1078,13 +1213,15 @@ valid_custom_variable_name(const char *name)
 {
 	bool		saw_sep = false;
 	bool		name_start = true;
+	bool		is_field = false;
+	const char *p;
 
-	for (const char *p = name; *p; p++)
+	for (p = name; *p; p++)
 	{
 		if (*p == GUC_QUALIFIER_SEPARATOR)
 		{
-			if (name_start)
-				return false;	/* empty name component */
+			if (name_start || is_field)
+				return false;	/* empty name component or field of struct */
 			saw_sep = true;
 			name_start = true;
 		}
@@ -1097,10 +1234,40 @@ valid_custom_variable_name(const char *name)
 		}
 		else if (!name_start && strchr("0123456789$", *p) != NULL)
 			 /* okay as non-first character */ ;
+		else if (*p == '-')
+		{
+			if (!name_start && *(p + 1) == '>')
+			{
+				name_start = true;
+				is_field = true;
+				p++;
+			}
+			else
+				return false;
+		}
+		else if (!name_start && *p == '[')
+		{
+			p++;
+			while (strchr("0123456789 ", *p) != NULL)
+				p++;
+
+			if ((*p == ']' && !*(p + 1)) || *(p + 1) == '-')
+				is_field = true;
+			else
+				return false;
+		}
 		else
 			return false;
 	}
-	if (name_start)
+
+	/*
+	 * Composite's name could be ended with '->', we should ignore last
+	 * dereference This dirty hack is used to see difference between composite
+	 * names and other GUCs It is important in case when we write placeholder
+	 * for composite, cause rule of writing placeholders for composite and
+	 * for other types are not the same
+	 */
+	if (name_start && *(p - 1) != '>')
 		return false;			/* empty name component */
 	/* OK if we found at least one separator */
 	return saw_sep;
@@ -1238,6 +1405,10 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 {
 	GUCHashEntry *hentry;
 	int			i;
+	char	   *field_path_start = NULL;
+	char	   *first_bracket = NULL;
+	char	   *first_minus = NULL;
+	char	   *struct_name = NULL;
 
 	Assert(name);
 
@@ -1248,6 +1419,37 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 										  NULL);
 	if (hentry)
 		return hentry->gucvar;
+
+	/*
+	 * If value is a field of composite, then it's name is a path that
+	 * consists of fields names, dereferences "->" and indexes [<number>]
+	 */
+	first_bracket = strchr(name, '[');
+	first_minus = strchr(name, '-');
+
+	if (first_bracket != NULL || first_minus != NULL)
+	{
+		/* take first dereference */
+		if (((first_bracket < first_minus) && first_bracket != NULL) || first_minus == NULL)
+			field_path_start = first_bracket;
+		else
+			field_path_start = first_minus;
+
+		struct_name = guc_malloc(ERROR, (field_path_start - name + 1));
+		strncpy(struct_name, name, (field_path_start - name));
+		struct_name[field_path_start - name] = 0;
+
+		hentry = (GUCHashEntry *) hash_search(guc_hashtab,
+											  &struct_name,
+											  HASH_FIND,
+											  NULL);
+
+		if (hentry)
+		{
+			guc_free(struct_name);
+			return hentry->gucvar;
+		}
+	}
 
 	/*
 	 * See if the name is an obsolete name for a variable.  We assume that the
@@ -1267,11 +1469,24 @@ find_option(const char *name, bool create_placeholders, bool skip_errors,
 		 * Check if the name is valid, and if so, add a placeholder.
 		 */
 		if (assignable_custom_variable_name(name, skip_errors, elevel))
+		{
+			if (field_path_start)
+			{
+				struct config_generic *result;
+
+				result = add_placeholder_variable(struct_name, elevel);
+				guc_free(struct_name);
+
+				return result;
+			}
+
 			return add_placeholder_variable(name, elevel);
+		}
 		else
 			return NULL;		/* error message, if any, already emitted */
 	}
 
+	guc_free(struct_name);
 	/* Unknown name and we're not supposed to make a placeholder */
 	if (!skip_errors)
 		ereport(elevel,
@@ -1431,6 +1646,7 @@ check_GUC_name_for_parameter_acl(const char *name)
  * real - can be 0.0, otherwise must be same as the boot_val
  * string - can be NULL, otherwise must be strcmp equal to the boot_val
  * enum - must be same as the boot_val
+ * struct - can be NULL, otherwise must be bitwise equal to the boot_val
  */
 #ifdef USE_ASSERT_CHECKING
 static bool
@@ -1499,6 +1715,38 @@ check_GUC_init(struct config_generic *gconf)
 						 conf->gen.name, conf->boot_val, *conf->variable);
 					return false;
 				}
+				break;
+			}
+		case PGC_COMPOSITE:
+			{
+				struct config_composite *conf = (struct config_composite *) gconf;
+				bool		is_null = true;
+				int			type_size = get_composite_size(conf->type_name);
+
+				for (int i = 0; i < type_size; ++i)
+				{
+					if (*((char *) (conf->variable) + i) != 0)
+					{
+						is_null = false;
+						break;
+					}
+				}
+
+				if (!is_null && composite_cmp(conf->variable, conf->boot_val, conf->type_name))
+				{
+					bool		not_write_to_file = false;
+					char	   *boot_str = composite_to_str(conf->boot_val, conf->type_name, not_write_to_file);
+					char	   *var_str = composite_to_str(conf->variable, conf->type_name, not_write_to_file);
+
+					elog(LOG, "GUC (PGC_COMPOSITE %s) %s, boot_val=%s, C-var=%s",
+						 conf->type_name, conf->gen.name, boot_str, var_str);
+
+					guc_free(boot_str);
+					guc_free(var_str);
+
+					return false;
+				}
+
 				break;
 			}
 	}
@@ -1747,6 +1995,65 @@ InitializeOneGUCOption(struct config_generic *gconf)
 					conf->assign_hook(newval, extra);
 				*conf->variable = conf->reset_val = newval;
 				conf->gen.extra = conf->reset_extra = extra;
+				break;
+			}
+		case PGC_COMPOSITE:
+			{
+				struct config_composite *conf = (struct config_composite *) gconf;
+				void	   *newval;
+				void	   *extra = NULL;
+				void	   *var_buffer = NULL;
+				int			valsize;
+
+				if (!conf->type_name && !conf->definition)
+				{
+					elog(FATAL, "failed to initialize %s. The type not specified",
+						 conf->gen.name);
+
+					break;
+				}
+
+				if (!conf->type_name)
+					conf->type_name = conf->definition->type_name;
+
+				if (!conf->definition
+					&& !is_static_array_type(conf->type_name)
+					&& !is_dynamic_array_type(conf->type_name))
+				{
+					conf->definition = get_type_definition(conf->type_name);
+
+					if (!conf->definition)
+					{
+						elog(FATAL, "failed to initialize %s. Undefined type %s",
+							 conf->gen.name, conf->type_name);
+
+						break;
+					}
+				}
+
+				/* non-NULL boot_val must always get compositedup'd */
+				if (conf->boot_val != NULL)
+					newval = composite_dup(conf->boot_val, conf->type_name);
+				else
+					newval = NULL;
+
+				if (!call_composite_check_hook(conf, newval, &extra,
+											   PGC_S_DEFAULT, LOG))
+					elog(FATAL, "failed to initialize %s to %s",
+						 conf->gen.name, newval ? composite_to_str(newval, conf->type_name, false) : "");
+
+				if (conf->assign_hook)
+					conf->assign_hook(newval, extra);
+
+				conf->reset_val = newval;
+
+				valsize = get_composite_size(conf->type_name);
+				var_buffer = composite_dup(newval, conf->type_name);
+				memcpy(conf->variable, var_buffer, valsize);
+				guc_free(var_buffer);
+
+				conf->gen.extra = conf->reset_extra = extra;
+
 				break;
 			}
 	}
@@ -2089,6 +2396,23 @@ ResetAllOptions(void)
 					*conf->variable = conf->reset_val;
 					set_extra_field(&conf->gen, &conf->gen.extra,
 									conf->reset_extra);
+					break;
+				}
+			case PGC_COMPOSITE:
+				{
+					struct config_composite *conf = (struct config_composite *) gconf;
+					int			valsize;
+
+					if (conf->assign_hook)
+						conf->assign_hook(conf->reset_val,
+										  conf->reset_extra);
+
+					valsize = get_composite_size(conf->type_name);
+					memcpy(conf->variable, conf->reset_val, valsize);
+
+					set_extra_field(&conf->gen, &conf->gen.extra,
+									conf->reset_extra);
+
 					break;
 				}
 		}
@@ -2503,6 +2827,37 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 												newextra);
 								changed = true;
 							}
+							break;
+						}
+					case PGC_COMPOSITE:
+						{
+							bool		value_on_heap = true;
+							struct config_composite *conf = (struct config_composite *) gconf;
+							void	   *newval = newvalue.val.compositeval;
+							void	   *newextra = newvalue.extra;
+
+							if (composite_cmp(conf->variable, newval, conf->type_name) ||
+								conf->gen.extra != newextra)
+							{
+								bool		value_not_on_heap = false;
+
+								if (conf->assign_hook)
+									conf->assign_hook(newval, newextra);
+
+								set_composite(conf, &conf->variable, newval, value_not_on_heap);
+								set_extra_field(&conf->gen, &conf->gen.extra,
+												newextra);
+								changed = true;
+							}
+
+							/*
+							 * Release stacked values if not used anymore. We
+							 * could use discard_stack_value() here, but since
+							 * we have type-specific code anyway, might as
+							 * well inline it.
+							 */
+							set_composite(conf, &stack->prior.val.compositeval, NULL, value_on_heap);
+							set_composite(conf, &stack->masked.val.compositeval, NULL, value_on_heap);
 							break;
 						}
 				}
@@ -3296,6 +3651,27 @@ parse_and_validate_value(struct config_generic *record,
 					return false;
 			}
 			break;
+		case PGC_COMPOSITE:
+			{
+				struct config_composite *conf = (struct config_composite *) record;
+				const char *hintmsg;
+
+				if (!parse_composite(value, conf->type_name, &newval->compositeval, conf->variable,
+									 conf->gen.flags, &hintmsg))
+				{
+					ereport(elevel,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid value for parameter \"%s\": \"%s\"",
+									conf->gen.name, value),
+							 hintmsg ? errhint("%s", _(hintmsg)) : 0));
+					return false;
+				}
+
+				if (!call_composite_check_hook(conf, newval->compositeval, newextra,
+											   source, elevel))
+					return false;
+			}
+			break;
 	}
 
 	return true;
@@ -4012,9 +4388,76 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, value,
-												  source, elevel,
-												  &newval_union, &newextra))
+					/* prepare placeholder for structure */
+					bool		is_placeholder = false;
+					bool		composite_value = false;
+					bool		check_parsing;
+					char	   *prepared_strval = (char *) value;	/* be careful with free */
+
+					/* check if string is a field of composite object or it */
+					if (strchr(name, '-') || strchr(name, '['))
+						is_placeholder = true;
+
+					if (suffix_is_arrow(name))
+						composite_value = true;
+
+					if (is_placeholder)
+					{
+						char	   *list;
+						char	   *old_list;
+						int			list_length;
+
+						/*
+						 * If value is a composite, name that ended with "->"
+						 * All other values are scalar, they must be escaped
+						 */
+						if (!composite_value)
+						{
+							char	   *escaped = escape_single_quotes_ascii(value);
+							int			quoted_length = strlen(escaped) + 3;
+							char	   *quoted = guc_malloc(ERROR, quoted_length);
+
+							snprintf(quoted, quoted_length, "\'%s\'", escaped);
+
+							prepared_strval = convert_path_to_composite_value(name, quoted);
+
+							free(escaped);
+							guc_free(quoted);
+						}
+						else
+							prepared_strval = convert_path_to_composite_value(name, value);
+
+						/* get list from current value */
+						old_list = *(conf->variable);
+
+						if (old_list == NULL)
+							old_list = "";
+
+						/* Add value to placeholder patch list */
+						if (strlen(old_list) == 0)
+						{
+							list_length= strlen(prepared_strval) + 1;
+							list = guc_malloc(ERROR, list_length);
+							snprintf(list, list_length, "%s", prepared_strval);
+						}
+						else
+						{
+							list_length = strlen(old_list) + strlen(prepared_strval) + 2;
+							list = guc_malloc(ERROR, list_length);
+							snprintf(list, list_length, "%s;%s", old_list, prepared_strval);
+						}
+
+						guc_free(prepared_strval);
+						prepared_strval = list;
+					}
+
+					check_parsing = parse_and_validate_value(record, prepared_strval, source,
+															 elevel, &newval_union, &newextra);
+
+					if (prepared_strval != value)
+						guc_free(prepared_strval);
+
+					if (!check_parsing)
 						return 0;
 				}
 				else if (source == PGC_S_DEFAULT)
@@ -4268,6 +4711,145 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 #undef newval
 			}
+		case PGC_COMPOSITE:
+			{
+				struct config_composite *conf = (struct config_composite *) record;
+				bool		parse_result;
+
+#define newval (newval_union.compositeval)
+				if (value)
+				{
+					const char *str_val = (const char *) normalize_composite_value(name, value);
+
+					parse_result = parse_and_validate_value(record, str_val, source, elevel,
+															&newval_union, &newextra);
+
+					guc_free((void *) str_val);
+
+					if (!parse_result)
+						return 0;
+				}
+				else if (source == PGC_S_DEFAULT)
+				{
+					/* non-NULL boot_val must be compositedup'd */
+					if (conf->boot_val != NULL)
+					{
+						newval = composite_dup(conf->boot_val, conf->type_name);
+						if (newval == NULL)
+							return 0;
+					}
+					else
+						newval = NULL;
+
+					if (!call_composite_check_hook(conf, newval, &newextra,
+												   source, elevel))
+					{
+						guc_free(newval);
+						return 0;
+					}
+				}
+				else
+				{
+					/*
+					 * composite_dup not needed, since reset_val is already
+					 * under guc.c's control
+					 */
+					newval = conf->reset_val;
+					newextra = conf->reset_extra;
+					source = conf->gen.reset_source;
+					context = conf->gen.reset_scontext;
+					srole = conf->gen.reset_srole;
+				}
+
+				if (prohibitValueChange)
+				{
+					bool		newval_different;
+
+					/* newval shouldn't be NULL, so we're a bit sloppy here */
+					newval_different = (conf->variable == NULL ||
+										newval == NULL ||
+										composite_cmp(conf->variable, newval, conf->type_name) != 0);
+
+					/* Release newval, unless it's reset_val */
+					if (newval && !composite_used(conf, newval))
+						free_composite(newval, conf->type_name);
+					/* Release newextra, unless it's reset_extra */
+					if (newextra && !extra_field_used(&conf->gen, newextra))
+						guc_free(newextra);
+
+					if (newval_different)
+					{
+						record->status |= GUC_PENDING_RESTART;
+						ereport(elevel,
+								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
+								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
+										conf->gen.name)));
+						return 0;
+					}
+					record->status &= ~GUC_PENDING_RESTART;
+					return -1;
+				}
+
+				if (changeVal)
+				{
+					bool		value_on_heap = false;
+
+					/* Save old value to support transaction abort */
+					if (!makeDefault)
+						push_old_value(&conf->gen, action);
+
+					if (conf->assign_hook)
+						conf->assign_hook(newval, newextra);
+					set_composite(conf, &conf->variable, newval, value_on_heap);
+					set_extra_field(&conf->gen, &conf->gen.extra,
+									newextra);
+					set_guc_source(&conf->gen, source);
+					conf->gen.scontext = context;
+					conf->gen.srole = srole;
+				}
+
+				if (makeDefault)
+				{
+					bool		value_on_heap = true;
+					GucStack   *stack;
+
+					if (conf->gen.reset_source <= source)
+					{
+						set_composite(conf, &conf->reset_val, newval, value_on_heap);
+						set_extra_field(&conf->gen, &conf->reset_extra,
+										newextra);
+						conf->gen.reset_source = source;
+						conf->gen.reset_scontext = context;
+						conf->gen.reset_srole = srole;
+					}
+					for (stack = conf->gen.stack; stack; stack = stack->prev)
+					{
+						if (stack->source <= source)
+						{
+							set_composite(conf, &stack->prior.val.compositeval,
+										  newval, value_on_heap);
+							set_extra_field(&conf->gen, &stack->prior.extra,
+											newextra);
+							stack->source = source;
+							stack->scontext = context;
+							stack->srole = srole;
+						}
+					}
+				}
+
+
+				/* Perhaps we didn't install newval anywhere */
+				if (newval && !composite_used(conf, newval))
+					free_composite(newval, conf->type_name);
+
+				/* Perhaps we didn't install newextra anywhere */
+				if (newextra && !extra_field_used(&conf->gen, newextra))
+				{
+					guc_free(newextra);
+					break;
+				}
+#undef newval
+			}
 	}
 
 	if (changeVal && (record->flags & GUC_REPORT) &&
@@ -4395,6 +4977,14 @@ GetConfigOption(const char *name, bool missing_ok, bool restrict_privileged)
 		case PGC_ENUM:
 			return config_enum_lookup_by_value((struct config_enum *) record,
 											   *((struct config_enum *) record)->variable);
+		case PGC_COMPOSITE:
+			{
+				bool		not_write_to_file = false;
+				void	   *var = ((struct config_composite *) record)->variable;
+				const char *var_type = ((struct config_composite *) record)->type_name;
+
+				return var ? composite_to_str(var, var_type, not_write_to_file) : "nil";
+			}
 	}
 	return NULL;
 }
@@ -4443,6 +5033,15 @@ GetConfigOptionResetString(const char *name)
 		case PGC_ENUM:
 			return config_enum_lookup_by_value((struct config_enum *) record,
 											   ((struct config_enum *) record)->reset_val);
+
+		case PGC_COMPOSITE:
+			{
+				bool		not_write_to_file = false;
+				void	   *val = ((struct config_composite *) record)->reset_val;
+				const char *val_type = ((struct config_composite *) record)->type_name;
+
+				return val ? composite_to_str(val, val_type, not_write_to_file) : "nil";
+			}
 	}
 	return NULL;
 }
@@ -4493,25 +5092,52 @@ write_auto_conf_file(int fd, const char *filename, ConfigVariable *head)
 				 errmsg("could not write to file \"%s\": %m", filename)));
 	}
 
-	/* Emit each parameter, properly quoting the value */
+	/*
+	 * Emit each parameter, quoting the value except when the option has a
+	 * composite value
+	 */
 	for (item = head; item != NULL; item = item->next)
 	{
+		bool		is_struct = false;
 		char	   *escaped;
 
 		resetStringInfo(&buf);
 
-		appendStringInfoString(&buf, item->name);
-		appendStringInfoString(&buf, " = '");
+		/*
+		 * Strutures names could be ended with "->" only in internal
+		 * representation. So delete this suffix for user interface
+		 */
+		if (item->name[strlen(item->name) - 2] == '-')
+		{
+			item->name[strlen(item->name) - 2] = 0;
+			appendStringInfoString(&buf, item->name);
+			is_struct = true;
+			item->name[strlen(item->name) - 2] = '-';
+		}
+		else
+			appendStringInfoString(&buf, item->name);
+		appendStringInfoString(&buf, " = ");
 
-		escaped = escape_single_quotes_ascii(item->value);
-		if (!escaped)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-		appendStringInfoString(&buf, escaped);
-		free(escaped);
+		/*
+		 * Append quotes for all scalar types But do not append qoutes for
+		 * structure values
+		 */
+		if (!is_struct)
+		{
+			appendStringInfoString(&buf, "\'");
+			escaped = escape_single_quotes_ascii(item->value);
+			if (!escaped)
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("out of memory")));
+			appendStringInfoString(&buf, escaped);
+			free(escaped);
+			appendStringInfoString(&buf, "\'");
+		}
+		else
+			appendStringInfoString(&buf, item->value);
 
-		appendStringInfoString(&buf, "'\n");
+		appendStringInfoString(&buf, "\n");
 
 		errno = 0;
 		if (write(fd, buf.data, buf.len) != buf.len)
@@ -4546,6 +5172,9 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 			   *next,
 			   *prev = NULL;
 
+	char	   *short_name = tokenize_field_path(pstrdup(name));
+	bool		is_struct = strchr(name, '-');
+
 	/*
 	 * Remove any existing match(es) for "name".  Normally there'd be at most
 	 * one, but if external tools have modified the config file, there could
@@ -4553,8 +5182,11 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 	 */
 	for (item = *head_p; item != NULL; item = next)
 	{
+		char	   *tokenized_item_name = tokenize_field_path(pstrdup(item->name));
+
 		next = item->next;
-		if (guc_name_compare(item->name, name) == 0)
+
+		if (guc_name_compare(tokenized_item_name, short_name) == 0)
 		{
 			/* found a match, delete it */
 			if (prev)
@@ -4571,15 +5203,23 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 		}
 		else
 			prev = item;
+		pfree(tokenized_item_name);
 	}
 
 	/* Done if we're trying to delete it */
 	if (value == NULL)
+	{
+		pfree(short_name);
 		return;
+	}
 
 	/* OK, append a new entry */
 	item = palloc(sizeof *item);
-	item->name = pstrdup(name);
+	if (is_struct)
+		item->name = pstrdup(name);
+	else
+		item->name = pstrdup(short_name);
+
 	item->value = pstrdup(value);
 	item->errmsg = NULL;
 	item->filename = pstrdup("");	/* new item has no location */
@@ -4593,6 +5233,7 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 	else
 		(*tail_p)->next = item;
 	*tail_p = item;
+	pfree(short_name);
 }
 
 
@@ -4633,6 +5274,17 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 	switch (altersysstmt->setstmt->kind)
 	{
 		case VAR_SET_VALUE:
+			if (stmt_has_serialized_composite(altersysstmt->setstmt))
+			{
+				/* replace name for structs */
+				int			composite_name_len = strlen(name) + 3;
+				char	   *composite_name = (char *) palloc(composite_name_len);
+
+				snprintf(composite_name, composite_name_len, "%s->", name);
+				pfree(name);
+				name = composite_name;
+			}
+
 			value = ExtractSetVariableArgs(altersysstmt->setstmt);
 			break;
 
@@ -4705,8 +5357,15 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 			{
 				union config_var_val newval;
 				void	   *newextra = NULL;
+				char	   *prepared_value = value;
 
-				if (!parse_and_validate_value(record, value,
+				/*
+				 * For struct values we should convert path
+				 */
+				if (record->vartype == PGC_COMPOSITE)
+					prepared_value = normalize_composite_value(name, value);
+
+				if (!parse_and_validate_value(record, prepared_value,
 											  PGC_S_FILE, ERROR,
 											  &newval, &newextra))
 					ereport(ERROR,
@@ -4714,8 +5373,74 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 							 errmsg("invalid value for parameter \"%s\": \"%s\"",
 									name, value)));
 
+				/*
+				 * Each composite placeholder has -> in name For placeholder
+				 * we using rules from set_config_with_handle Also cut off
+				 * suffix of name
+				 */
+				if (record->vartype == PGC_STRING && strchr(name, '-'))
+				{
+					struct config_string *conf = (struct config_string *) record;
+
+					if (value)
+					{
+						char	   *prepared = normalize_composite_value(name, value);
+						char	   *list;
+						char	   *old_list = *conf->variable ? *conf->variable : "";
+						int			list_len = strlen(old_list) + strlen(prepared) + 2;
+
+						/* Add value to placeholder patch list */
+						list = guc_malloc(ERROR, list_len);
+						snprintf(list, list_len, "%s%s;", old_list, prepared);
+
+						pfree(value);
+						value = pstrdup(list);
+						guc_free(list);
+						guc_free(prepared);
+					}
+					tokenize_field_path(name);
+				}
+
 				if (record->vartype == PGC_STRING && newval.stringval != NULL)
+				{
 					guc_free(newval.stringval);
+				}
+
+				/*
+				 * For struct we replace value with serialized parsed value
+				 * Notice that patch is applied to current value
+				 */
+				if (record->vartype == PGC_COMPOSITE)
+				{
+					char	   *serial_struct = NULL;
+					char	   *composite_name;
+					int			composite_name_length;
+					bool		write_to_file = true;
+
+					pfree(value);
+					serial_struct = composite_to_str(newval.compositeval, ((struct config_composite *) record)->type_name, write_to_file);
+					if (serial_struct == NULL)
+						value = NULL;
+					else
+					{
+						value = pstrdup(serial_struct);
+						guc_free(serial_struct);
+					}
+					free_composite(newval.compositeval, ((struct config_composite *) record)->type_name);
+
+					/*
+					 * replace name with struct name + "->"" We need suffix to
+					 * detect structure in replace_auto_config_value and
+					 * write_auto_conf_file
+					 */
+					name = tokenize_field_path(name);
+					composite_name_length = strlen(name) + 3;
+					composite_name = (char *) palloc(composite_name_length);
+
+					snprintf(composite_name, composite_name_length, "%s->", name);
+					pfree(name);
+					name = composite_name;
+				}
 				guc_free(newextra);
 			}
 		}
@@ -4734,6 +5459,25 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 			 */
 			if (value || !valid_custom_variable_name(name))
 				(void) assignable_custom_variable_name(name, false, ERROR);
+
+			/*
+			 * If option is composite, we can understand it with "->" or "[]"
+			 * in name
+			 */
+			if (strchr(name, '-') || strchr(name, '['))
+			{
+				char	   *prepared = normalize_composite_value(name, value);
+
+				pfree(value);
+				value = pstrdup(prepared);
+				guc_free(prepared);
+
+				/*
+				 * prepare name to replace_auto_config_value We set -> at the
+				 * end of name to distinguish placeholders for composites
+				 */
+				tokenize_field_path(name);
+			}
 		}
 
 		/*
@@ -4944,6 +5688,15 @@ define_custom_variable(struct config_generic *variable)
 	const char *name = variable->name;
 	GUCHashEntry *hentry;
 	struct config_string *pHolder;
+	char	   *name_with_suffix = (char *) name;
+
+	if (variable->vartype == PGC_COMPOSITE)
+	{
+		int			name_with_suffix_len = strlen(name) + 3;
+
+		name_with_suffix = guc_malloc(ERROR, name_with_suffix_len);
+		snprintf(name_with_suffix, name_with_suffix_len, "%s->", name);
+	}
 
 	/* Check mapping between initial and default value */
 	Assert(check_GUC_init(variable));
@@ -5009,7 +5762,7 @@ define_custom_variable(struct config_generic *variable)
 
 	/* First, apply the reset value if any */
 	if (pHolder->reset_val)
-		(void) set_config_option_ext(name, pHolder->reset_val,
+		(void) set_config_option_ext(name_with_suffix, pHolder->reset_val,
 									 pHolder->gen.reset_scontext,
 									 pHolder->gen.reset_source,
 									 pHolder->gen.reset_srole,
@@ -5030,6 +5783,9 @@ define_custom_variable(struct config_generic *variable)
 
 	/* Now we can free the no-longer-referenced placeholder variable */
 	free_placeholder(pHolder);
+
+	if (name_with_suffix != name)
+		guc_free(name_with_suffix);
 }
 
 /*
@@ -5049,6 +5805,15 @@ reapply_stacked_values(struct config_generic *variable,
 {
 	const char *name = variable->name;
 	GucStack   *oldvarstack = variable->stack;
+	char	   *name_with_suffix = (char *) name;
+
+	if (variable->vartype == PGC_COMPOSITE)
+	{
+		int			name_with_suffix_len = strlen(name) + 3;
+
+		name_with_suffix = guc_malloc(ERROR, name_with_suffix_len);
+		snprintf(name_with_suffix, name_with_suffix_len, "%s->", name);
+	}
 
 	if (stack != NULL)
 	{
@@ -5061,21 +5826,21 @@ reapply_stacked_values(struct config_generic *variable,
 		switch (stack->state)
 		{
 			case GUC_SAVE:
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_with_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_SAVE, true,
 											 WARNING, false);
 				break;
 
 			case GUC_SET:
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_with_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_SET, true,
 											 WARNING, false);
 				break;
 
 			case GUC_LOCAL:
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_with_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_LOCAL, true,
 											 WARNING, false);
@@ -5083,14 +5848,14 @@ reapply_stacked_values(struct config_generic *variable,
 
 			case GUC_SET_LOCAL:
 				/* first, apply the masked value as SET */
-				(void) set_config_option_ext(name, stack->masked.val.stringval,
+				(void) set_config_option_ext(name_with_suffix, stack->masked.val.stringval,
 											 stack->masked_scontext,
 											 PGC_S_SESSION,
 											 stack->masked_srole,
 											 GUC_ACTION_SET, true,
 											 WARNING, false);
 				/* then apply the current value as LOCAL */
-				(void) set_config_option_ext(name, curvalue,
+				(void) set_config_option_ext(name_with_suffix, curvalue,
 											 curscontext, cursource, cursrole,
 											 GUC_ACTION_LOCAL, true,
 											 WARNING, false);
@@ -5116,7 +5881,7 @@ reapply_stacked_values(struct config_generic *variable,
 			cursource != pHolder->gen.reset_source ||
 			cursrole != pHolder->gen.reset_srole)
 		{
-			(void) set_config_option_ext(name, curvalue,
+			(void) set_config_option_ext(name_with_suffix, curvalue,
 										 curscontext, cursource, cursrole,
 										 GUC_ACTION_SET, true, WARNING, false);
 			if (variable->stack != NULL)
@@ -5126,6 +5891,9 @@ reapply_stacked_values(struct config_generic *variable,
 			}
 		}
 	}
+
+	if (name != name_with_suffix)
+		guc_free(name_with_suffix);
 }
 
 /*
@@ -5289,6 +6057,66 @@ DefineCustomEnumVariable(const char *name,
 	define_custom_variable(&var->gen);
 }
 
+void
+DefineCustomCompositeVariable(const char *name,
+							  const char *short_desc,
+							  const char *long_desc,
+							  const char *type_name,
+							  void *valueAddr,
+							  const void *bootValueAddr,
+							  GucContext context,
+							  int flags,
+							  GucCompositeCheckHook check_hook,
+							  GucCompositeAssignHook assign_hook,
+							  GucShowHook show_hook)
+{
+	struct config_composite *var;
+	struct type_definition *type_definition = NULL;
+
+	if (!is_static_array_type(type_name) && !is_dynamic_array_type(type_name))
+	{
+		type_definition = get_type_definition(type_name);
+		if (type_definition == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("option %s has undefined type %s", name, type_name)));
+	}
+
+	var = (struct config_composite *)
+		init_custom_variable(name, short_desc, long_desc, context, flags,
+							 PGC_COMPOSITE, sizeof(struct config_composite));
+	var->variable = valueAddr;
+	var->type_name = type_name;
+	var->boot_val = bootValueAddr;
+	var->check_hook = check_hook;
+	var->assign_hook = assign_hook;
+	var->show_hook = show_hook;
+	var->definition = type_definition;
+	define_custom_variable(&var->gen);
+}
+
+void
+DefineCustomCompositeType(const char *type_name, const char *signature)
+{
+	bool		found;
+	OptionTypeHashEntry *type_hentry;
+	struct type_definition *type_definition = (struct type_definition *) guc_malloc(ERROR, sizeof(struct type_definition));
+
+	memset(type_definition, 0, sizeof(struct type_definition));
+	type_definition->type_name = type_name;
+	type_definition->signature = signature;
+	type_hentry = (OptionTypeHashEntry *) hash_search(guc_types_hashtab,
+													  &type_definition->type_name,
+													  HASH_ENTER,
+													  &found);
+
+	Assert(!found);
+	type_hentry->definition = type_definition;
+
+	if (!is_scalar_type(type_definition->type_name))
+		init_type_definition(type_definition);
+}
+
 /*
  * Mark the given GUC prefix as "reserved".
  *
@@ -5429,6 +6257,22 @@ get_explain_guc_options(int *num)
 					modified = (lconf->boot_val != *(lconf->variable));
 				}
 				break;
+			case PGC_COMPOSITE:
+				{
+					struct config_composite *lconf = (struct config_composite *) conf;
+
+					if (lconf->boot_val == NULL &&
+						lconf->variable == NULL)
+						modified = false;
+					else if (lconf->boot_val == NULL ||
+							 lconf->variable == NULL)
+						modified = true;
+					else
+					{
+						modified = (composite_cmp(lconf->boot_val, lconf->variable, lconf->type_name) != 0);
+					}
+				}
+				break;
 
 			default:
 				elog(ERROR, "unexpected GUC type: %d", conf->vartype);
@@ -5454,6 +6298,8 @@ char *
 GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 {
 	struct config_generic *record;
+	char	   *first_minus = strchr(name, '-');
+	char	   *first_bracket = strchr(name, '[');
 
 	record = find_option(name, false, missing_ok, ERROR);
 	if (record == NULL)
@@ -5472,6 +6318,39 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 
 	if (varname)
 		*varname = record->name;
+
+	/*
+	 * For structure fields we use custom show function. yes it's so sloppy
+	 * but SHowGucOption can't use string as parameter
+	 */
+	if (first_minus || first_bracket)
+	{
+		void	   *structp = NULL;
+		char	   *field_type;
+		char	   *str_opt;
+		char	   *result;
+		struct config_composite *conf = (struct config_composite *) record;
+
+		if (conf->show_hook)
+			result = pstrdup(conf->show_hook());
+		else
+		{
+			bool		not_write_to_file = false;
+
+			/* find start of structure and convert it to struct */
+			structp = get_nested_field_ptr(conf->variable, conf->type_name, name);
+			field_type = get_nested_field_type_name(conf->type_name, name);
+			str_opt = composite_to_str(structp, field_type, not_write_to_file);
+
+			/* copy result */
+			result = pstrdup(str_opt);
+
+			/* free work structures */
+			guc_free(field_type);
+			guc_free(str_opt);
+		}
+		return result;
+	}
 
 	return ShowGUCOption(record, true);
 }
@@ -5580,6 +6459,27 @@ ShowGUCOption(struct config_generic *record, bool use_units)
 			}
 			break;
 
+		case PGC_COMPOSITE:
+			{
+				struct config_composite *conf = (struct config_composite *) record;
+
+				if (conf->show_hook)
+					val = conf->show_hook();
+				else if (conf->variable)
+				{
+					bool		not_write_to_file = false;
+					char	   *result;
+					char	   *value = composite_to_str(conf->variable, conf->type_name, not_write_to_file);
+
+					result = pstrdup(value);
+					guc_free(value);
+					return result;	/* yes it's awful, so the shortest way
+									 * that I found */
+				}
+				else
+					val = "nil";
+			}
+			break;
 		default:
 			/* just to keep compiler quiet */
 			val = "???";
@@ -5656,6 +6556,21 @@ write_one_nondefault_variable(FILE *fp, struct config_generic *gconf)
 
 				fprintf(fp, "%s",
 						config_enum_lookup_by_value(conf, *conf->variable));
+			}
+			break;
+
+		case PGC_COMPOSITE:
+			{
+				struct config_composite *conf = (struct config_composite *) gconf;
+
+				if (conf->variable)
+				{
+					bool		not_write_to_file = false;
+					char	   *serialized = composite_to_str(conf->variable, conf->type_name, not_write_to_file);
+
+					fprintf(fp, "%s", serialized);
+					guc_free(serialized);
+				}
 			}
 			break;
 	}
@@ -5940,6 +6855,16 @@ estimate_variable_size(struct config_generic *gconf)
 				valsize = strlen(config_enum_lookup_by_value(conf, *conf->variable));
 			}
 			break;
+
+		case PGC_COMPOSITE:
+			{
+				struct config_composite *conf = (struct config_composite *) gconf;
+
+				if (conf->variable)
+					valsize = get_length_composite_str(conf->variable, conf->type_name);
+				else
+					valsize = 0;
+			}
 	}
 
 	/* Allow space for terminating zero-byte for value */
@@ -6098,6 +7023,16 @@ serialize_variable(char **destptr, Size *maxbytes,
 							 config_enum_lookup_by_value(conf, *conf->variable));
 			}
 			break;
+
+		case PGC_COMPOSITE:
+			{
+				bool		not_write_to_file = false;
+				struct config_composite *conf = (struct config_composite *) gconf;
+				char	   *struct_str = composite_to_str(conf->variable, conf->type_name, not_write_to_file);
+
+				do_serialize(destptr, maxbytes, "%s", struct_str);
+				guc_free(struct_str);
+			}
 	}
 
 	do_serialize(destptr, maxbytes, "%s",
@@ -6311,6 +7246,17 @@ RestoreGUCState(void *gucstate)
 				{
 					struct config_enum *conf = (struct config_enum *) gconf;
 
+					if (conf->reset_extra && conf->reset_extra != gconf->extra)
+						guc_free(conf->reset_extra);
+					break;
+				}
+			case PGC_COMPOSITE:
+				{
+					struct config_composite *conf = (struct config_composite *)gconf;
+
+					free_composite(conf->variable, conf->type_name);
+					if (conf->reset_val && conf->reset_val != conf->variable)
+						free_composite(conf->reset_val, conf->type_name);
 					if (conf->reset_extra && conf->reset_extra != gconf->extra)
 						guc_free(conf->reset_extra);
 					break;
@@ -7007,4 +7953,54 @@ call_enum_check_hook(struct config_enum *conf, int *newval, void **extra,
 	}
 
 	return true;
+}
+
+static bool
+call_composite_check_hook(struct config_composite *conf, void *newval, void **extra,
+						GucSource source, int elevel)
+{
+	volatile bool result = true;
+
+	/* Quick success if no hook */
+	if (!conf->check_hook)
+		return true;
+
+	/*
+	 * If elevel is ERROR, or if the check_hook itself throws an elog
+	 * (undesirable, but not always avoidable), make sure we don't leak the
+	 * already-malloc'd newval struct.
+	 */
+	PG_TRY();
+	{
+		/* Reset variables that might be set by hook */
+		GUC_check_errcode_value = ERRCODE_INVALID_PARAMETER_VALUE;
+		GUC_check_errmsg_string = NULL;
+		GUC_check_errdetail_string = NULL;
+		GUC_check_errhint_string = NULL;
+
+		if (!conf->check_hook(newval, extra, source))
+		{
+			ereport(elevel,
+					(errcode(GUC_check_errcode_value),
+					 GUC_check_errmsg_string ?
+					 errmsg_internal("%s", GUC_check_errmsg_string) :
+					 errmsg("invalid value for parameter \"%s\": %s",
+							conf->gen.name, newval ? composite_to_str(newval, conf->type_name, false) : ""),
+					 GUC_check_errdetail_string ?
+					 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
+					 GUC_check_errhint_string ?
+					 errhint("%s", GUC_check_errhint_string) : 0));
+			/* Flush any strings created in ErrorContext */
+			FlushErrorState();
+			result = false;
+		}
+	}
+	PG_CATCH();
+	{
+		guc_free(newval);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	return result;
 }

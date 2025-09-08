@@ -16,8 +16,11 @@ override CPPFLAGS := -I. -I$(srcdir) $(CPPFLAGS)
 
 OBJS = \
 	conffiles.o \
+	guc_composite.o \
 	guc.o \
 	guc-file.o \
+	guc_composite_gram.o\
+	guc_composite_scan.o\
 	guc_funcs.o \
 	guc_tables.o \
 	help_config.o \
@@ -42,5 +45,18 @@ endif
 
 include $(top_srcdir)/src/backend/common.mk
 
+# See notes in src/backend/parser/Makefile about the following two rules
+guc_composite_gram.h: guc_composite_gram.c
+	touch $@
+
+guc_composite_gram.c: BISONFLAGS += -d
+
+# Force these dependencies to be known even without dependency info built:
+guc_composite_gram.o guc_composite_scanner.o: guc_composite_gram.h
+
+
 clean:
 	rm -f guc-file.c
+	rm -f guc_composite_scan.c
+	rm -f guc_composite_gram.c
+	rm -f guc_composite_gram.h

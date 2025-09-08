@@ -166,7 +166,7 @@ generated-parser-sources:
 	$(MAKE) -C bootstrap	bootparse.c bootparse.h bootscanner.c
 	$(MAKE) -C replication	repl_gram.c repl_gram.h repl_scanner.c syncrep_gram.c syncrep_gram.h syncrep_scanner.c
 	$(MAKE) -C utils/adt	jsonpath_gram.c jsonpath_gram.h jsonpath_scan.c
-	$(MAKE) -C utils/misc	guc-file.c
+	$(MAKE) -C utils/misc	guc-file.c guc_composite_gram.c guc_composite_gram.h guc_composite_scan.c
 
 
 ##########################################################################

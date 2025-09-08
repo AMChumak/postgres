@@ -81,3 +81,17 @@ makeBitString(char *str)
 	v->bsval = str;
 	return v;
 }
+
+/*
+ *	makeSerializedComposite
+ *
+ * Caller is responsible for passing a palloc'd string.
+ */
+SerializedComposite *
+makeSerializedComposite(char *str)
+{
+	SerializedComposite	   *v = makeNode(SerializedComposite);
+
+	v->sval = str;
+	return v;
+}

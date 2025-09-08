@@ -83,10 +83,13 @@ LETTER			[A-Za-z_\200-\377]
 LETTER_OR_DIGIT [A-Za-z_0-9\200-\377]
 
 ID				{LETTER}{LETTER_OR_DIGIT}*
-QUALIFIED_ID	{ID}"."{ID}
+DEREF           "->"
+INDEX           "["{DIGIT}+"]"
+AID             {ID}({DEREF}{ID}|{INDEX})*
+QUALIFIED_ID	{ID}"."{AID}
 
-UNQUOTED_STRING {LETTER}({LETTER_OR_DIGIT}|[-._:/])*
 STRING			\'([^'\\\n]|\\.|\'\')*\'
+UNQUOTED_STRING (({LETTER}({LETTER_OR_DIGIT}|[-._:/])*)|(\{|\[)({LETTER_OR_DIGIT}|{STRING}|[-._:/\,\[\]\{\}\ \t\r\n])*(\}|\]))
 
 %%
 
@@ -94,7 +97,7 @@ STRING			\'([^'\\\n]|\\.|\'\')*\'
 [ \t\r]+		/* eat whitespace */
 #.*				/* eat comment (.* matches anything until newline) */
 
-{ID}			return GUC_ID;
+{AID}			return GUC_ID;
 {QUALIFIED_ID}	return GUC_QUALIFIED_ID;
 {STRING}		return GUC_STRING;
 {UNQUOTED_STRING} return GUC_UNQUOTED_STRING;
@@ -421,7 +424,27 @@ ParseConfigFp(FILE *fp, const char *config_file, int depth, int elevel,
 		if (token == GUC_STRING)	/* strip quotes and escapes */
 			opt_value = DeescapeQuotedString(yytext);
 		else
+		{
 			opt_value = pstrdup(yytext);
+
+			if (token == GUC_UNQUOTED_STRING && (opt_value[0] == '{' || opt_value[0] == '['))
+			{
+				char *line_begin = opt_value;
+				/* mark name as composite */
+				int name_len = strlen(opt_name) + 3;
+				char *composite_name = (char *)palloc(name_len);
+				snprintf(composite_name, name_len, "%s->", opt_name);
+				pfree(opt_name);
+				opt_name = composite_name;
+
+				/* count lines for multi-line composite values */
+				while ((line_begin = strchr(line_begin, '\n')) != NULL)
+				{
+					ConfigFileLineno++;
+					line_begin++;
+				}
+			}
+		}
 
 		/* now we'd like an end of line, or possibly EOF */
 		token = yylex(scanner);

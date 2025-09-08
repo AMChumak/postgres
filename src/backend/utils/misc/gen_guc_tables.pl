@@ -25,7 +25,7 @@ my $parse = Catalog::ParseData($input_fname);
 open my $ofh, '>', $output_fname or die;
 
 print_boilerplate($ofh, $output_fname, 'GUC tables');
-foreach my $type (qw(bool int real string enum))
+foreach my $type (qw(bool int real string enum composite))
 {
 	print_one_table($ofh, $type);
 }
@@ -79,6 +79,8 @@ sub print_one_table
 			print $ofh "\n";
 		}
 		print $ofh "\t\t},\n";
+		printf $ofh "\t\t%s,\n", dquote($entry->{type_name})
+		  if $entry->{type} eq 'composite';
 		print $ofh "\t\t&$entry->{variable},\n";
 		print $ofh "\t\t$entry->{boot_val},";
 		print $ofh " $entry->{min},"

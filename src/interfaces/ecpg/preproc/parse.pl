@@ -260,6 +260,10 @@ sub main
 		s/{/ { /g;
 		s/}/ } /g;
 
+		# Make exclusion for '{' and '}'
+		s/' \{ '/'{'/g;
+		s/' \} '/'}'/g;
+
 		# Likewise for comment start/end markers
 		s|\/\*| /* |g;
 		s|\*\/| */ |g;

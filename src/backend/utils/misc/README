@@ -292,3 +292,121 @@ worry about NULL values ever, the variable can be given a non-null static
 initializer as well as a non-null boot_val.  guc.c will overwrite the
 static initializer pointer with a copy of the boot_val during
 InitializeGUCOptions, but the variable will never contain a NULL.
+
+
+GUC composite type options
+--------------------------
+
+Composite types include structures, static and dynamic arrays.
+Composite types can have several levels of nesting.
+
+User interface:
+
+	To use the composite type options, you need to register the types
+	used in the system. To do this, add the type description to the guc_tables.c
+	file in the UserDefinedConfigureTypes array or use the DefineCustomCompositeType
+	function if you are creating a type from an extension. Note that the sequence
+	of fields in the type signature must exactly match the signature
+	of the structure in the C code.
+
+	type definition is a structure type_definition. See guc_tables.h
+	Main fields of the definition are type_name and signature.
+	The signature syntax is as follows:
+	"<type_1> <name_1>;<type_2> <name_2>; ... ; <type_K> <name_K>"
+	type_i - type of field
+	name_i - name of field
+
+	The field can have a type that is already registered in the system
+	(types that are in the array before) or array type of already registered types
+	Arrays syntax:
+	<type>[<length>] - static array
+	<type>[] - dynamic array
+
+	Representation in C code of dynamic array is a structure like
+	struct DynamicArray
+	{
+		void *data;
+		int size;
+	};
+	It is important to keep the order of the fields, because mapping takes place
+	according to the type signature and alignment rules of the C language.
+
+	After registering the composite type, you can use it when declaring
+	a new composite option in the ConfigureNamesComposite array.
+
+	Composite types in the user interface support the following syntax:
+	option_name = {field_name: field_value, ..., field_name: field_value}
+	option_name->field_name = field_value
+	option_name = [value, value, ..., value]
+	option_name = [<index>: value, ..., <index>: value]
+	The same syntax is used in psql in SET and SHOW commands.
+
+Example:
+
+	Consider example option in C code:
+
+	struct DynArrStr
+	{
+		char **data;
+		int size;
+	};
+
+	struct ExampleOptionType
+	{
+		int a;
+		struct DynArrStr b;
+		double c[3];
+	};
+
+	struct ExampleOptionType example_option;
+
+	To register new option in GUC follow instruction:
+
+	1. Declare global structure for boot value:
+
+		struct ExampleOptionType example_option_boot;
+
+	2. In guc_tables.c in UserDefinedConfigureTypes declare element
+
+		{
+			"example_type",
+			"int a; string[] b; real[3] c"
+		} /* other fields will be filled automatically */
+		Notice, that declarations in UserDefinedConfigureTypes
+		must be sorted with topological order
+
+	3. In guc_tables.c in ConfigureNamesComposite declare element
+
+		{
+			{"example_option",...}, /* config_generic */
+			"example_type", /* option type */
+			&example_option,
+			&example_option_boot,
+			NULL, NULL, NULL /* hooks */
+		}
+		Option type is a type that declared in UserDefinedConfigureTypes or array type
+
+	For extensions use functions:
+		DefineCustomCompositeType - define new type
+		DefineCustomCompositeVariable - define new composite guc option
+
+Internals:
+
+	Composite types use incremental value setting semantics.
+	When setting a value, you can omit some fields of the structure/array,
+	then the unspecified fields will not change their values.
+	Maintaining this semantics for extensions required special processing
+	of placeholders for structural values. Instead of rewriting the value
+	of the field, we add it using ';'. This preserves the linear order in which
+	values are applied.
+
+	Since the logic of processing placeholders for composite types differs
+	from others, there is a need to distinguish between composite types and
+	scalar ones. To do this, it is forbidden to wrap a compound type value
+	in quotation marks. Inside, the system will add characters "->" to the
+	name of such a value, which only composite option can have.
+
+	In general, the processing of quotation marks for composite types differs
+	from scalar types, since string fields are wrapped in quotation marks
+	and the usual Deescape is not suitable for the entire structure.
+	Therefore, be careful when changing this logic.

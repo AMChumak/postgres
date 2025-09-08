@@ -755,10 +755,72 @@ const char *const config_type_names[] =
 	[PGC_REAL] = "real",
 	[PGC_STRING] = "string",
 	[PGC_ENUM] = "enum",
+	[PGC_COMPOSITE] = "composite",
 };
 
-StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
+StaticAssertDecl(lengthof(config_type_names) == (PGC_COMPOSITE + 1),
 				 "array length mismatch");
 
+/*
+ * Table of user composite types
+ *
+ * See src/backend/utils/misc/README for design notes.
+ *
+ * TO ADD NEW DEFINITION OF COMPOSITE TYPE:
+ *
+ * 1.    Decide on a type name
+ *
+ * 2.    Add a record below.
+ *   	 Signature (second field of structure) must be in format:
+ *    	  	"<type_1> <name_1>;<type_2> <name_2>; ... ; <type_K> <name_K>"
+ *    	 	where type_N - one of { bool, int, real, string, <custom_type>}
+ *		 	(custom_type - already defined composite type,
+ *			 array[<number>] - static array,
+ *			 array[] - dynamic array)
+ *
+ * HINT. Do not fill 3 - 6 fields, they will be filled automatically
+ *       in init_type_definition function
+ *
+ * NOTE. You must change set of functions in guc_composite.c to add
+ *		 a scalar type. See how built-in types are implemented.
+ */
+struct type_definition UserDefinedConfigureTypes[] = {
+	{
+		"bool",
+		NULL,
+		0,
+		sizeof(bool),
+		sizeof(bool),
+		NULL
+	},
+	{
+		"int",
+		NULL,
+		0,
+		sizeof(int),
+		sizeof(int),
+		NULL
+	},
+	{
+		"real",
+		NULL,
+		0,
+		sizeof(double),
+		sizeof(double),
+		NULL
+	},
+	{
+		"string",
+		NULL,
+		0,
+		sizeof(char *),
+		sizeof(char *),
+		NULL
+	},
+	/* End-of-list marker */
+	{
+		NULL, NULL
+	}
+};
 
 #include "utils/guc_tables.inc.c"

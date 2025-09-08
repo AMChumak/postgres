@@ -627,6 +627,22 @@ makeStringConst(char *str, int location)
 }
 
 /*
+ * makeSerializedCompositeConst -
+ * 	build a A_Const node of type T_SerializedComposite for given string
+ */
+Node *
+makeSerializedCompositeConst(char *str, int location)
+{
+	A_Const    *n = makeNode(A_Const);
+
+	n->val.sval.type = T_SerializedComposite;
+	n->val.sval.sval = str;
+	n->location = location;
+
+	return (Node *) n;
+}
+
+/*
  * makeDefElem -
  *	build a DefElem node
  *
