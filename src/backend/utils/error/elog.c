@@ -112,6 +112,8 @@ int			Log_destination = LOG_DESTINATION_STDERR;
 char	   *Log_destination_string = NULL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
+char *logLevelNames[5];
+char *logLevelNamesBoot[5] = {"TRACE","LOG","WARNING","ERROR","FATAL"};
 
 /* Processed form of backtrace_functions GUC */
 static char *backtrace_function_list;

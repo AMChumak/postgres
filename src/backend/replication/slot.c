@@ -163,6 +163,9 @@ int			idle_replication_slot_timeout_secs = 0;
  */
 char	   *synchronized_standby_slots;
 
+struct ReplicaConfig replicaConfig;
+struct ReplicaConfig replicaConfigBoot;
+
 /* This is the parsed and cached configuration for synchronized_standby_slots */
 static SyncStandbySlotsConfigData *synchronized_standby_slots_config;
 

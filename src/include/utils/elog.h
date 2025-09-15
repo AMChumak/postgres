@@ -493,6 +493,8 @@ extern PGDLLIMPORT int Log_destination;
 extern PGDLLIMPORT char *Log_destination_string;
 extern PGDLLIMPORT bool syslog_sequence_numbers;
 extern PGDLLIMPORT bool syslog_split_messages;
+extern PGDLLIMPORT char *logLevelNames[5];
+extern PGDLLIMPORT char *logLevelNamesBoot[5];
 
 /* Log destination bitmap */
 #define LOG_DESTINATION_STDERR	 1

@@ -294,6 +294,16 @@ extern PGDLLIMPORT int max_replication_slots;
 extern PGDLLIMPORT char *synchronized_standby_slots;
 extern PGDLLIMPORT int idle_replication_slot_timeout_secs;
 
+struct ReplicaConfig
+{
+	bool enable_connections;
+	int max_delay;
+	int max_slots_size;
+};
+
+extern PGDLLIMPORT struct ReplicaConfig replicaConfig;
+extern PGDLLIMPORT struct ReplicaConfig replicaConfigBoot;
+
 /* shmem initialization functions */
 extern Size ReplicationSlotsShmemSize(void);
 extern void ReplicationSlotsShmemInit(void);

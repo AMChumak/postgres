@@ -1,0 +1,203 @@
+-- STRUCT
+SHOW replica;
+              replica               
+------------------------------------
+ {                                 +
+         enable_connections: false,+
+         max_delay: 0,             +
+         max_slot_size: 0          +
+ }
+(1 row)
+
+SET replica->max_delay to 42;
+SHOW replica->max_delay;
+ replica 
+---------
+ 42
+(1 row)
+
+SET replica to {enable_connections: true, max_slot_size: 10};
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 42,           +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+SET replica->invalid_field to 4;
+ERROR:  invalid value for parameter "replica": "{invalid_field: '4'}"
+HINT:  incorrect field name at or near ":"
+-- STATIC ARRAY
+SHOW log_level_names;
+  log_level_names   
+--------------------
+ [                 +
+         'TRACE',  +
+         'LOG',    +
+         'WARNING',+
+         'ERROR',  +
+         'FATAL'   +
+ ]
+(1 row)
+
+SET log_level_names[0] to 'DEBUG';
+SHOW log_level_names[0];
+ log_level_names 
+-----------------
+ 'DEBUG'
+(1 row)
+
+SET log_level_names[10] to 'EXTRA';
+ERROR:  invalid value for parameter "log_level_names": "[10: 'EXTRA']"
+HINT:  there is index which is greater than size of array at or near ":"
+SET log_level_names[-1] to 'EXTRA';
+ERROR:  syntax error at or near "-"
+LINE 1: SET log_level_names[-1] to 'EXTRA';
+                            ^
+-- DYNAMIC ARRAY
+SHOW shared_preload_libraries_list;
+ shared_preload_libraries_list 
+-------------------------------
+ [                            +
+ ]
+(1 row)
+
+SET shared_preload_libraries_list[0] to 'yet_another_ext';
+SHOW shared_preload_libraries_list->data[0];
+ shared_preload_libraries_list 
+-------------------------------
+ 'yet_another_ext'
+(1 row)
+
+SET extended_guc_arrays to true;
+SHOW shared_preload_libraries_list;
+   shared_preload_libraries_list   
+-----------------------------------
+ {                                +
+         size: 1,                 +
+         data: [                  +
+                 'yet_another_ext'+
+         ]                        +
+ }
+(1 row)
+
+SET shared_preload_libraries_list->size to 2;
+SHOW shared_preload_libraries_list;
+   shared_preload_libraries_list    
+------------------------------------
+ {                                 +
+         size: 2,                  +
+         data: [                   +
+                 'yet_another_ext',+
+                 nil               +
+         ]                         +
+ }
+(1 row)
+
+SET shared_preload_libraries_list to {size: 2, data: [3: 'third_ext']};
+ERROR:  invalid value for parameter "shared_preload_libraries_list": "{size: 2, data: [3: 'third_ext']}"
+HINT:  there is index greater than array length.								Change "size" field at or near "'third_ext'"
+SET extended_guc_arrays to false;
+-- CHECK GUC STACK
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 42,           +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+BEGIN;
+SET replica->max_delay to 6;
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 6,            +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+COMMIT;
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 6,            +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 6,            +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+BEGIN;
+SET replica->max_delay to 28;
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 28,           +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+ABORT;
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 6,            +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 6,            +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+BEGIN;
+SET LOCAL replica->max_delay to 28;
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 28,           +
+         max_slot_size: 10        +
+ }
+(1 row)
+
+COMMIT;
+SHOW replica;
+              replica              
+-----------------------------------
+ {                                +
+         enable_connections: true,+
+         max_delay: 6,            +
+         max_slot_size: 10        +
+ }
+(1 row)
+

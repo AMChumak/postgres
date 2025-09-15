@@ -3481,4 +3481,32 @@
   assign_hook => 'assign_io_method',
 },
 
+{ name => 'replica', type => 'composite', context => 'PGC_USERSET', group => 'REPLICATION_PRIMARY',
+  short_desc => 'config of replica',
+  type_name => 'ReplicaConfigType',
+  variable => 'replicaConfig',
+  boot_val => '&replicaConfigBoot',
+},
+
+{ name => 'shared_preload_libraries_list',type => 'composite', context => 'PGC_USERSET', group => 'CLIENT_CONN_PRELOAD',
+  short_desc => 'list of shared preloaded libraries',
+  type_name => 'string[]',
+  variable => 'sharedLibs',
+  boot_val => '&sharedLibsBoot',
+},
+
+{ name => 'ssn', type => 'composite', context => 'PGC_USERSET', group => 'REPLICATION_PRIMARY',
+  short_desc => 'new synchronous_standby_names',
+  type_name => 'SSNType',
+  variable => 'ssn',
+  boot_val => '&ssnBoot',
+},
+
+{ name => 'log_level_names', type => 'composite', context => 'PGC_USERSET', group => 'LOGGING_WHAT',
+  short_desc => 'array of names for 5 log levels',
+  type_name => 'string[5]',
+  variable => 'logLevelNames',
+  boot_val => '&logLevelNamesBoot',
+},
+
 ]

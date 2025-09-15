@@ -76,6 +76,21 @@ extern PGDLLIMPORT SyncRepConfigData *SyncRepConfig;
 /* user-settable parameters for synchronous replication */
 extern PGDLLIMPORT char *SyncRepStandbyNames;
 
+struct DynArrStr
+{
+	char **data;
+	int size;
+};
+struct SSNType
+{
+	char *mode;
+	int threshold;
+	struct DynArrStr names;
+};
+
+extern PGDLLIMPORT struct SSNType ssn;
+extern PGDLLIMPORT struct SSNType ssnBoot;
+
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
 

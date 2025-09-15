@@ -817,6 +817,14 @@ struct type_definition UserDefinedConfigureTypes[] = {
 		sizeof(char *),
 		NULL
 	},
+	{
+		"ReplicaConfigType",
+		"bool enable_connections; int max_delay; int max_slot_size"
+	},
+	{
+		"SSNType",
+		"string mode; int threshold; string[] names"
+	},
 	/* End-of-list marker */
 	{
 		NULL, NULL

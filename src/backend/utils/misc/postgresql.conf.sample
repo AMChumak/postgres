@@ -882,4 +882,9 @@ autovacuum_worker_slots = 16	# autovacuum worker slots to allocate
 # CUSTOMIZED OPTIONS
 #------------------------------------------------------------------------------
 
+#replica = {}
+#shared_preload_libraries_list = []
+#ssn = {}
+#log_level_names = []
+
 # Add settings for extensions here

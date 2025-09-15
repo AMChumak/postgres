@@ -199,6 +199,7 @@ typedef const char *(*GucShowHook) (void);
 /*
  * Miscellaneous
  */
+
 typedef enum
 {
 	/* Types of set_config_option actions */

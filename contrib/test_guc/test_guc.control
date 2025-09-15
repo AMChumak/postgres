@@ -1,0 +1,5 @@
+# test_guc extension
+comment = 'Simple GUC extension with composite parameters'
+default_version = '1.0'
+module_pathname = '$libdir/test_guc'
+relocatable = true

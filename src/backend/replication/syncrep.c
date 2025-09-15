@@ -89,6 +89,9 @@
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 
+struct SSNType ssn;
+struct SSNType ssnBoot;
+
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
 

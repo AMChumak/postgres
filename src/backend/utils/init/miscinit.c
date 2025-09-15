@@ -1833,6 +1833,9 @@ char	   *session_preload_libraries_string = NULL;
 char	   *shared_preload_libraries_string = NULL;
 char	   *local_preload_libraries_string = NULL;
 
+struct ShrLibArr sharedLibs;
+struct ShrLibArr sharedLibsBoot;
+
 /* Flag telling that we are loading shared_preload_libraries */
 bool		process_shared_preload_libraries_in_progress = false;
 bool		process_shared_preload_libraries_done = false;

@@ -516,6 +516,15 @@ extern PGDLLIMPORT char *session_preload_libraries_string;
 extern PGDLLIMPORT char *shared_preload_libraries_string;
 extern PGDLLIMPORT char *local_preload_libraries_string;
 
+struct ShrLibArr
+{
+	char **libs;
+	int size;
+};
+
+extern PGDLLIMPORT struct ShrLibArr sharedLibs;
+extern PGDLLIMPORT struct ShrLibArr sharedLibsBoot;
+
 extern void CreateDataDirLockFile(bool amPostmaster);
 extern void CreateSocketLockFile(const char *socketfile, bool amPostmaster,
 								 const char *socketDir);
